@@ -50,11 +50,11 @@ Edit `.env` with your actual values:
 DATABASE_URL="postgresql://user:password@postgres:5432/alertdb"
 
 # Grafana Configuration
-GRAFANA_API_URL="https://grafana.observability.devo.com"
+GRAFANA_API_URL="https://grafana.example.com"
 GRAFANA_API_KEY="your_actual_grafana_api_key"
 
 # Jira Service Management Configuration
-JIRA_URL="https://devoinc.atlassian.net"
+JIRA_URL="https://yourcompany.atlassian.net"
 JIRA_USER_EMAIL="your-email@domain.com"
 JIRA_API_TOKEN="your_actual_jira_api_token"
 JIRA_PROJECT_KEY="OP"
@@ -67,7 +67,7 @@ GRAFANA_SYNC_INTERVAL_SECONDS=600
 
 # Frontend Configuration
 REACT_APP_API_BASE_URL="http://localhost:8000"
-REACT_APP_JIRA_URL="https://devoinc.atlassian.net"
+REACT_APP_JIRA_URL="https://yourcompany.atlassian.net"
 ```
 
 ### 3. Obtain API Credentials
