@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: alert-postgres
+    environment:
+      POSTGRES_DB: alertdb
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - alert-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d alertdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    container_name: alert-backend
+    environment:
+      DATABASE_URL: postgresql://user:password@postgres:5432/alertdb
+      GRAFANA_API_URL: ${GRAFANA_API_URL}
+      GRAFANA_API_KEY: ${GRAFANA_API_KEY}
+      JIRA_URL: ${JIRA_URL}
+      JIRA_USER_EMAIL: ${JIRA_USER_EMAIL}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN}
+      JIRA_PROJECT_KEY: ${JIRA_PROJECT_KEY}
+      JIRA_INCIDENT_ISSUE_TYPE: ${JIRA_INCIDENT_ISSUE_TYPE}
+      JIRA_ACKNOWLEDGE_TRANSITION_NAME: ${JIRA_ACKNOWLEDGE_TRANSITION_NAME}
+      JIRA_RESOLVE_TRANSITION_NAME: ${JIRA_RESOLVE_TRANSITION_NAME}
+      GRAFANA_SYNC_INTERVAL_SECONDS: ${GRAFANA_SYNC_INTERVAL_SECONDS:-600}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - alert-network
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    build: ./frontend
+    container_name: alert-frontend
+    environment:
+      REACT_APP_API_BASE_URL: ${REACT_APP_API_BASE_URL:-http://localhost:8000}
+      REACT_APP_JIRA_URL: ${REACT_APP_JIRA_URL}
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - alert-network
+
+volumes:
+  postgres_data:
+
+networks:
+  alert-network:
+    driver: bridge
