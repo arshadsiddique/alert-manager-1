@@ -37,7 +37,7 @@ const AppLayout = ({ children, currentPage, onPageChange }) => {
           <DashboardOutlined style={{ fontSize: '24px', color: 'white' }} />
           {!collapsed && (
             <div style={{ color: 'white', marginTop: '8px', fontSize: '12px' }}>
-              Alert Manager
+              Devo Alert Manager
             </div>
           )}
         </div>
@@ -54,7 +54,7 @@ const AppLayout = ({ children, currentPage, onPageChange }) => {
         <Header style={{ background: 'white', padding: '0 24px' }}>
           <Space>
             <Title level={3} style={{ margin: 0 }}>
-              Grafana → Jira Alert Manager
+              Devo Alert Manager
             </Title>
             <span style={{ color: '#666', fontSize: '14px' }}>
               Sync alerts from Grafana to Jira Service Management

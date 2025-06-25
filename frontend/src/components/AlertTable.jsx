@@ -16,7 +16,9 @@ import {
   Row,
   Col,
   Switch,
-  Tabs
+  Tabs,
+  Badge,
+  Progress
 } from 'antd';
 import { 
   CheckOutlined, 
@@ -31,16 +33,13 @@ import {
   DashboardOutlined,
   TableOutlined,
   QuestionCircleOutlined,
-  FileExcelOutlined
+  FileExcelOutlined,
+  ApiOutlined,
+  EyeOutlined,
+  InfoCircleOutlined,
+  ThunderboltOutlined
 } from '@ant-design/icons';
 import moment from 'moment';
-import { useFilterPersistence } from '../hooks/useFilterPersistence';
-import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
-import FilterPresets from './FilterPresets';
-import BulkOperations from './BulkOperations';
-import StatusIndicator from './StatusIndicator';
-import DashboardWidgets from './DashboardWidgets';
-import CSVExportModal from './CSVExportModal';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -51,73 +50,27 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [acknowledgeModalVisible, setAcknowledgeModalVisible] = useState(false);
   const [resolveModalVisible, setResolveModalVisible] = useState(false);
-  const [csvExportModalVisible, setCsvExportModalVisible] = useState(false);
+  const [detailModalVisible, setDetailModalVisible] = useState(false);
+  const [selectedAlert, setSelectedAlert] = useState(null);
   const [acknowledgeForm] = Form.useForm();
   const [resolveForm] = Form.useForm();
   const [currentView, setCurrentView] = useState('table');
   const searchInputRef = useRef(null);
   
-  // Use persistent filters
-  const {
-    filters,
-    updateFilter,
-    clearFilters,
-    showAdvancedFilters,
-    setShowAdvancedFilters
-  } = useFilterPersistence({
+  // Filters state
+  const [filters, setFilters] = useState({
     alertName: '',
     cluster: '',
     severity: [],
     grafanaStatus: [],
-    jiraStatus: [],
-    assignee: '',
+    jsmStatus: [],
+    matchType: [],
+    owner: '',
     acknowledgedBy: '',
     resolvedBy: '',
-    dateRange: null,
-    jiraIssueKey: ''
+    dateRange: null
   });
-
-  // Keyboard shortcuts
-  const {
-    shortcutsEnabled,
-    helpVisible,
-    setHelpVisible,
-    renderHelpModal
-  } = useKeyboardShortcuts({
-    onRefresh: onSync,
-    onSelectAll: () => {
-      const selectableAlerts = filteredAlerts
-        .filter(alert => alert.jira_status !== 'resolved' && alert.grafana_status !== 'resolved')
-        .map(alert => alert.id);
-      setSelectedRowKeys(selectableAlerts);
-      message.success(`Selected ${selectableAlerts.length} alerts`);
-    },
-    onClearSelection: () => {
-      setSelectedRowKeys([]);
-      message.success('Selection cleared');
-    },
-    onAcknowledge: () => {
-      if (selectedRowKeys.length > 0) {
-        setAcknowledgeModalVisible(true);
-      }
-    },
-    onResolve: () => {
-      if (selectedRowKeys.length > 0) {
-        setResolveModalVisible(true);
-      }
-    },
-    onToggleFilters: () => {
-      setShowAdvancedFilters(!showAdvancedFilters);
-      message.success(showAdvancedFilters ? 'Advanced filters hidden' : 'Advanced filters shown');
-    },
-    onFocusSearch: () => {
-      if (searchInputRef.current) {
-        searchInputRef.current.focus();
-        message.success('Search focused');
-      }
-    },
-    selectedCount: selectedRowKeys.length
-  });
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
   // Get unique values for dropdowns
   const uniqueValues = useMemo(() => {
@@ -125,8 +78,9 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       clusters: [...new Set(alerts.map(alert => alert.cluster).filter(Boolean))],
       severities: [...new Set(alerts.map(alert => alert.severity).filter(Boolean))],
       grafanaStatuses: [...new Set(alerts.map(alert => alert.grafana_status).filter(Boolean))],
-      jiraStatuses: [...new Set(alerts.map(alert => alert.jira_status).filter(Boolean))],
-      assignees: [...new Set(alerts.map(alert => alert.jira_assignee).filter(Boolean))],
+      jsmStatuses: [...new Set(alerts.map(alert => alert.jsm_status).filter(Boolean))],
+      matchTypes: [...new Set(alerts.map(alert => alert.match_type).filter(Boolean))],
+      owners: [...new Set(alerts.map(alert => alert.jsm_owner).filter(Boolean))],
       acknowledgedBy: [...new Set(alerts.map(alert => alert.acknowledged_by).filter(Boolean))],
       resolvedBy: [...new Set(alerts.map(alert => alert.resolved_by).filter(Boolean))]
     };
@@ -142,16 +96,13 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       if (filters.cluster && !alert.cluster?.toLowerCase().includes(filters.cluster.toLowerCase())) {
         return false;
       }
-      if (filters.assignee && !alert.jira_assignee?.toLowerCase().includes(filters.assignee.toLowerCase())) {
+      if (filters.owner && !alert.jsm_owner?.toLowerCase().includes(filters.owner.toLowerCase())) {
         return false;
       }
       if (filters.acknowledgedBy && !alert.acknowledged_by?.toLowerCase().includes(filters.acknowledgedBy.toLowerCase())) {
         return false;
       }
       if (filters.resolvedBy && !alert.resolved_by?.toLowerCase().includes(filters.resolvedBy.toLowerCase())) {
-        return false;
-      }
-      if (filters.jiraIssueKey && !alert.jira_issue_key?.toLowerCase().includes(filters.jiraIssueKey.toLowerCase())) {
         return false;
       }
 
@@ -162,7 +113,10 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       if (filters.grafanaStatus.length > 0 && !filters.grafanaStatus.includes(alert.grafana_status)) {
         return false;
       }
-      if (filters.jiraStatus.length > 0 && !filters.jiraStatus.includes(alert.jira_status)) {
+      if (filters.jsmStatus.length > 0 && !filters.jsmStatus.includes(alert.jsm_status)) {
+        return false;
+      }
+      if (filters.matchType.length > 0 && !filters.matchType.includes(alert.match_type)) {
         return false;
       }
 
@@ -179,17 +133,22 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
     });
   }, [alerts, filters]);
 
-  // Clear all filters
-  const handleClearFilters = () => {
-    clearFilters();
-    setSelectedRowKeys([]);
+  const updateFilter = (key, value) => {
+    setFilters(prev => ({ ...prev, [key]: value }));
   };
 
-  // Apply filter preset
-  const handleApplyPreset = (presetFilters) => {
-    clearFilters();
-    Object.entries(presetFilters).forEach(([key, value]) => {
-      updateFilter(key, value);
+  const clearFilters = () => {
+    setFilters({
+      alertName: '',
+      cluster: '',
+      severity: [],
+      grafanaStatus: [],
+      jsmStatus: [],
+      matchType: [],
+      owner: '',
+      acknowledgedBy: '',
+      resolvedBy: '',
+      dateRange: null
     });
     setSelectedRowKeys([]);
   };
@@ -209,10 +168,35 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       active: 'red',
       resolved: 'green',
       open: 'orange',
+      acked: 'blue',
       acknowledged: 'blue',
       closed: 'green',
     };
     return colors[status?.toLowerCase()] || 'default';
+  };
+
+  const getMatchTypeColor = (matchType) => {
+    const colors = {
+      alias: 'green',
+      tags_and_content: 'blue',
+      content_similarity: 'orange',
+      none: 'red'
+    };
+    return colors[matchType] || 'default';
+  };
+
+  const showAlertDetails = (alert) => {
+    setSelectedAlert(alert);
+    setDetailModalVisible(true);
+  };
+
+  const getJSMUrl = (alert) => {
+    if (alert.jsm_alert_id) {
+      // Construct JSM alert URL - this may need adjustment based on your JSM setup
+      const baseUrl = process.env.REACT_APP_JIRA_URL || 'https://devoinc.atlassian.net';
+      return `${baseUrl}/servicedesk/alerts/${alert.jsm_alert_id}`;
+    }
+    return null;
   };
 
   const columns = [
@@ -221,24 +205,23 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       dataIndex: 'alert_name',
       key: 'alert_name',
       sorter: (a, b) => (a.alert_name || '').localeCompare(b.alert_name || ''),
-      sortDirections: ['ascend', 'descend'],
       render: (text, record) => (
         <div>
-          <div style={{ fontWeight: 'bold' }}>{text}</div>
+          <div style={{ fontWeight: 'bold' }}>
+            <Button 
+              type="link" 
+              onClick={() => showAlertDetails(record)}
+              style={{ padding: 0, height: 'auto', fontWeight: 'bold' }}
+            >
+              {text}
+            </Button>
+          </div>
           <div style={{ fontSize: '12px', color: '#666' }}>
             {record.cluster && `Cluster: ${record.cluster}`}
             {record.pod && ` | Pod: ${record.pod}`}
           </div>
         </div>
       ),
-    },
-    {
-      title: 'Cluster',
-      dataIndex: 'cluster',
-      key: 'cluster',
-      sorter: (a, b) => (a.cluster || '').localeCompare(b.cluster || ''),
-      sortDirections: ['ascend', 'descend'],
-      render: (text) => text || '-',
     },
     {
       title: 'Severity',
@@ -248,7 +231,6 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
         const severityOrder = { critical: 4, warning: 3, info: 2, unknown: 1 };
         return (severityOrder[a.severity] || 0) - (severityOrder[b.severity] || 0);
       },
-      sortDirections: ['ascend', 'descend'],
       render: (severity) => (
         <Tag color={getSeverityColor(severity)}>
           {severity?.toUpperCase() || 'UNKNOWN'}
@@ -256,24 +238,10 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       ),
     },
     {
-      title: 'Summary',
-      dataIndex: 'summary',
-      key: 'summary',
-      ellipsis: true,
-      sorter: (a, b) => (a.summary || '').localeCompare(b.summary || ''),
-      sortDirections: ['ascend', 'descend'],
-      render: (text) => (
-        <Tooltip title={text}>
-          {text || 'No summary available'}
-        </Tooltip>
-      ),
-    },
-    {
       title: 'Grafana Status',
       dataIndex: 'grafana_status',
       key: 'grafana_status',
       sorter: (a, b) => (a.grafana_status || '').localeCompare(b.grafana_status || ''),
-      sortDirections: ['ascend', 'descend'],
       render: (status) => (
         <Tag color={getStatusColor(status)}>
           {status?.toUpperCase()}
@@ -281,41 +249,53 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       ),
     },
     {
-      title: 'Jira Status',
-      dataIndex: 'jira_status',
-      key: 'jira_status',
-      sorter: (a, b) => (a.jira_status || '').localeCompare(b.jira_status || ''),
-      sortDirections: ['ascend', 'descend'],
-      render: (status, record) => (
+      title: 'JSM Status & Match',
+      key: 'jsm_info',
+      sorter: (a, b) => (a.jsm_status || 'none').localeCompare(b.jsm_status || 'none'),
+      render: (_, record) => (
         <div>
-          <Tag color={getStatusColor(status)}>
-            {status?.toUpperCase()}
-          </Tag>
-          {!record.jira_issue_key && (
-            <div style={{ fontSize: '10px', color: '#999', marginTop: '2px' }}>
-              No Jira ticket
-            </div>
-          )}
+          <div style={{ marginBottom: '4px' }}>
+            {record.jsm_status ? (
+              <Tag color={getStatusColor(record.jsm_status)}>
+                JSM: {record.jsm_status?.toUpperCase()}
+              </Tag>
+            ) : (
+              <Tag color="default">No JSM Alert</Tag>
+            )}
+            {record.jsm_acknowledged && (
+              <Tag color="blue" size="small" style={{ marginLeft: '4px' }}>
+                ACK
+              </Tag>
+            )}
+          </div>
+          <div>
+            <Tag 
+              color={getMatchTypeColor(record.match_type)} 
+              size="small"
+              icon={record.match_type !== 'none' ? <ApiOutlined /> : <ExclamationCircleOutlined />}
+            >
+              {record.match_type || 'none'}: {record.match_confidence || 0}%
+            </Tag>
+          </div>
         </div>
       ),
     },
     {
-      title: 'Assignee / Acknowledged By',
+      title: 'Owner / Acknowledged By',
       key: 'assignee_info',
       sorter: (a, b) => {
-        const aName = a.jira_assignee || a.acknowledged_by || a.resolved_by || '';
-        const bName = b.jira_assignee || b.acknowledged_by || b.resolved_by || '';
+        const aName = a.jsm_owner || a.acknowledged_by || '';
+        const bName = b.jsm_owner || b.acknowledged_by || '';
         return aName.localeCompare(bName);
       },
-      sortDirections: ['ascend', 'descend'],
       render: (_, record) => (
         <div>
-          {record.jira_assignee && (
+          {record.jsm_owner && (
             <div style={{ marginBottom: '4px' }}>
               <Avatar size="small" icon={<UserOutlined />} style={{ marginRight: '4px' }} />
-              <Tooltip title={`Jira Assignee: ${record.jira_assignee_email || 'No email'}`}>
+              <Tooltip title={`JSM Owner: ${record.jsm_owner}`}>
                 <span style={{ fontSize: '12px', color: '#1890ff' }}>
-                  {record.jira_assignee}
+                  {record.jsm_owner}
                 </span>
               </Tooltip>
             </div>
@@ -344,65 +324,80 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
               )}
             </div>
           )}
-          {!record.jira_assignee && !record.acknowledged_by && !record.resolved_by && (
+          {!record.jsm_owner && !record.acknowledged_by && !record.resolved_by && (
             <span style={{ color: '#ccc', fontSize: '12px' }}>Unassigned</span>
           )}
         </div>
       ),
     },
     {
-      title: 'Jira Issue',
-      dataIndex: 'jira_issue_key',
-      key: 'jira_issue_key',
-      sorter: (a, b) => (a.jira_issue_key || '').localeCompare(b.jira_issue_key || ''),
-      sortDirections: ['ascend', 'descend'],
-      render: (issueKey, record) => (
-        issueKey ? (
-          <Button
-            type="link"
-            size="small"
-            icon={<LinkOutlined />}
-            onClick={() => window.open(record.jira_issue_url, '_blank')}
-          >
-            {issueKey}
-          </Button>
-        ) : (
-          <Tooltip title="Jira ticket will be created by Grafana integration">
-            <span style={{ color: '#ccc', fontSize: '12px' }}>Pending ticket creation</span>
-          </Tooltip>
-        )
-      ),
-    },
-    {
-      title: 'Started At',
-      dataIndex: 'started_at',
-      key: 'started_at',
-      sorter: (a, b) => {
-        const dateA = moment(a.started_at);
-        const dateB = moment(b.started_at);
-        return dateA.isBefore(dateB) ? -1 : dateA.isAfter(dateB) ? 1 : 0;
+      title: 'JSM Alert',
+      key: 'jsm_alert',
+      sorter: (a, b) => (a.jsm_tiny_id || '').localeCompare(b.jsm_tiny_id || ''),
+      render: (_, record) => {
+        if (record.jsm_alert_id) {
+          const jsmUrl = getJSMUrl(record);
+          return (
+            <div>
+              <Button
+                type="link"
+                size="small"
+                icon={<ThunderboltOutlined />}
+                onClick={() => jsmUrl && window.open(jsmUrl, '_blank')}
+                disabled={!jsmUrl}
+              >
+                {record.jsm_tiny_id || record.jsm_alert_id?.substring(0, 8)}
+              </Button>
+              {record.jsm_priority && (
+                <div style={{ fontSize: '10px', color: '#999' }}>
+                  Priority: {record.jsm_priority}
+                </div>
+              )}
+            </div>
+          );
+        } else {
+          return (
+            <Tooltip title="No matching JSM alert found">
+              <span style={{ color: '#ccc', fontSize: '12px' }}>
+                No JSM Alert
+              </span>
+            </Tooltip>
+          );
+        }
       },
-      sortDirections: ['ascend', 'descend'],
-      defaultSortOrder: 'descend',
-      render: (date) => date ? moment(date).format('YYYY-MM-DD HH:mm:ss') : 'N/A',
     },
     {
-      title: 'Created At',
-      dataIndex: 'created_at',
-      key: 'created_at',
+      title: 'Created / Updated',
+      key: 'timestamps',
       sorter: (a, b) => {
         const dateA = moment(a.created_at);
         const dateB = moment(b.created_at);
         return dateA.isBefore(dateB) ? -1 : dateA.isAfter(dateB) ? 1 : 0;
       },
-      sortDirections: ['ascend', 'descend'],
-      render: (date) => date ? moment(date).format('YYYY-MM-DD HH:mm:ss') : 'N/A',
+      defaultSortOrder: 'descend',
+      render: (_, record) => (
+        <div>
+          <div style={{ fontSize: '12px' }}>
+            <strong>Created:</strong> {moment(record.created_at).format('MM/DD HH:mm')}
+          </div>
+          {record.started_at && (
+            <div style={{ fontSize: '10px', color: '#666' }}>
+              Started: {moment(record.started_at).format('MM/DD HH:mm')}
+            </div>
+          )}
+          {record.jsm_created_at && (
+            <div style={{ fontSize: '10px', color: '#1890ff' }}>
+              JSM: {moment(record.jsm_created_at).format('MM/DD HH:mm')}
+            </div>
+          )}
+        </div>
+      ),
     },
     {
       title: 'Actions',
       key: 'actions',
       render: (_, record) => (
-        <Space>
+        <Space direction="vertical" size="small">
           {record.generator_url && (
             <Button
               type="link"
@@ -412,6 +407,14 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
               View in Grafana
             </Button>
           )}
+          <Button
+            type="link"
+            size="small"
+            icon={<EyeOutlined />}
+            onClick={() => showAlertDetails(record)}
+          >
+            Details
+          </Button>
         </Space>
       ),
     },
@@ -427,12 +430,12 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       const values = await acknowledgeForm.validateFields();
       const success = await onAcknowledge(selectedRowKeys, values.note, values.acknowledged_by);
       if (success) {
-        message.success(`Successfully acknowledged ${selectedRowKeys.length} alert${selectedRowKeys.length > 1 ? 's' : ''}`);
+        message.success(`Successfully acknowledged ${selectedRowKeys.length} alert${selectedRowKeys.length > 1 ? 's' : ''} in JSM`);
         setSelectedRowKeys([]);
         setAcknowledgeModalVisible(false);
         acknowledgeForm.resetFields();
       } else {
-        message.error('Failed to acknowledge alerts');
+        message.error('Failed to acknowledge alerts in JSM');
       }
     } catch (error) {
       console.error('Validation failed:', error);
@@ -449,424 +452,463 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       const values = await resolveForm.validateFields();
       const success = await onResolve(selectedRowKeys, values.note, values.resolved_by);
       if (success) {
-        message.success(`Successfully resolved ${selectedRowKeys.length} alert${selectedRowKeys.length > 1 ? 's' : ''}`);
+        message.success(`Successfully resolved ${selectedRowKeys.length} alert${selectedRowKeys.length > 1 ? 's' : ''} in JSM`);
         setSelectedRowKeys([]);
         setResolveModalVisible(false);
         resolveForm.resetFields();
       } else {
-        message.error('Failed to resolve alerts');
+        message.error('Failed to resolve alerts in JSM');
       }
     } catch (error) {
       console.error('Validation failed:', error);
     }
   };
 
-  const unacknowledgedCount = filteredAlerts.filter(
-    alert => alert.jira_status !== 'acknowledged' && alert.jira_status !== 'resolved' && alert.grafana_status === 'active'
-  ).length;
-
-  const unresolvedCount = filteredAlerts.filter(
-    alert => alert.jira_status !== 'resolved' && alert.grafana_status === 'active'
-  ).length;
-
-  const withoutJiraTickets = filteredAlerts.filter(
-    alert => !alert.jira_issue_key && alert.grafana_status === 'active'
-  ).length;
-
-  const totalFilteredCount = filteredAlerts.length;
-  const totalCount = alerts.length;
+  // Calculate statistics
+  const stats = useMemo(() => {
+    const matched = filteredAlerts.filter(a => a.jsm_alert_id).length;
+    const unmatched = filteredAlerts.length - matched;
+    const acknowledged = filteredAlerts.filter(a => a.jsm_acknowledged || a.acknowledged_by).length;
+    const resolved = filteredAlerts.filter(a => a.is_resolved).length;
+    const critical = filteredAlerts.filter(a => a.severity === 'critical' && a.grafana_status === 'active').length;
+    
+    return { matched, unmatched, acknowledged, resolved, critical, total: filteredAlerts.length };
+  }, [filteredAlerts]);
 
   return (
     <div>
-      {/* Status Indicator */}
-      <StatusIndicator
-        alerts={alerts}
-        loading={loading}
-        error={error}
-        onRefresh={onSync}
-        filteredCount={totalFilteredCount}
-        selectedCount={selectedRowKeys.length}
-      />
-
-      {/* Main Content Tabs */}
-      <Tabs 
-        activeKey={currentView}
-        onChange={setCurrentView}
-        type="card"
-        tabBarExtraContent={
-          <Space>
-            <Tooltip title="Export to CSV">
-              <Button 
-                icon={<FileExcelOutlined />}
-                onClick={() => setCsvExportModalVisible(true)}
-              >
-                Export CSV
-              </Button>
-            </Tooltip>
-            <Tooltip title="Keyboard shortcuts (Shift + H)">
-              <Button 
-                size="small" 
-                icon={<QuestionCircleOutlined />}
-                onClick={() => setHelpVisible(true)}
-              />
-            </Tooltip>
-          </Space>
-        }
-      >
-        <TabPane 
-          tab={
-            <span>
-              <DashboardOutlined />
-              Dashboard
-            </span>
-          } 
-          key="dashboard"
-        >
-          <DashboardWidgets alerts={filteredAlerts} loading={loading} />
-        </TabPane>
-
-        <TabPane 
-          tab={
-            <span>
-              <TableOutlined />
-              Alert Table
-              {totalFilteredCount !== totalCount && (
-                <Tag size="small" style={{ marginLeft: 8 }}>
-                  {totalFilteredCount}/{totalCount}
-                </Tag>
-              )}
-            </span>
-          } 
-          key="table"
-        >
-          {/* Alert Summary */}
-          {withoutJiraTickets > 0 && (
-            <Card 
-              size="small" 
-              style={{ marginBottom: 16, backgroundColor: '#fff7e6', border: '1px solid #ffd591' }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', fontSize: '14px' }}>
-                <ExclamationCircleOutlined style={{ color: '#fa8c16', marginRight: 8 }} />
-                <span>
-                  <strong>{withoutJiraTickets}</strong> alert{withoutJiraTickets > 1 ? 's' : ''} waiting for Jira ticket creation by Grafana integration
-                </span>
-              </div>
-            </Card>
-          )}
-
-          {/* Filter Panel */}
-          <Card 
-            title={
-              <Space>
-                <FilterOutlined />
-                Filters & Search
-                <Tag color={totalFilteredCount !== totalCount ? 'blue' : 'default'}>
-                  {totalFilteredCount} of {totalCount} alerts
-                </Tag>
-              </Space>
-            }
-            extra={
-              <Space>
-                <Switch
-                  checkedChildren="Advanced"
-                  unCheckedChildren="Simple"
-                  checked={showAdvancedFilters}
-                  onChange={setShowAdvancedFilters}
-                />
-                <Button 
-                  icon={<ClearOutlined />} 
-                  onClick={handleClearFilters}
-                  disabled={Object.values(filters).every(val => !val || (Array.isArray(val) && val.length === 0))}
-                >
-                  Clear Filters
-                </Button>
-              </Space>
-            }
-            style={{ marginBottom: 16 }}
-          >
-            {/* Quick Filter Presets */}
-            <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid #f0f0f0' }}>
-              <div style={{ marginBottom: 8, fontSize: '12px', color: '#666', fontWeight: 'bold' }}>
-                QUICK FILTERS
-              </div>
-              <FilterPresets onApplyPreset={handleApplyPreset} currentFilters={filters} />
-            </div>
-            <Row gutter={[16, 16]}>
-              {/* Basic Filters */}
-              <Col xs={24} sm={12} md={8} lg={6}>
-                <Input
-                  ref={searchInputRef}
-                  placeholder="Search alert name..."
-                  prefix={<SearchOutlined />}
-                  value={filters.alertName}
-                  onChange={(e) => updateFilter('alertName', e.target.value)}
-                  allowClear
-                />
-              </Col>
-              
-              <Col xs={24} sm={12} md={8} lg={6}>
-                <Select
-                  mode="multiple"
-                  placeholder="Filter by severity"
-                  value={filters.severity}
-                  onChange={(value) => updateFilter('severity', value)}
-                  style={{ width: '100%' }}
-                  allowClear
-                >
-                  {uniqueValues.severities.map(severity => (
-                    <Option key={severity} value={severity}>
-                      <Tag color={getSeverityColor(severity)} size="small">
-                        {severity?.toUpperCase()}
-                      </Tag>
-                    </Option>
-                  ))}
-                </Select>
-              </Col>
-              
-              <Col xs={24} sm={12} md={8} lg={6}>
-                <Select
-                  mode="multiple"
-                  placeholder="Filter by Grafana status"
-                  value={filters.grafanaStatus}
-                  onChange={(value) => updateFilter('grafanaStatus', value)}
-                  style={{ width: '100%' }}
-                  allowClear
-                >
-                  {uniqueValues.grafanaStatuses.map(status => (
-                    <Option key={status} value={status}>
-                      <Tag color={getStatusColor(status)} size="small">
-                        {status?.toUpperCase()}
-                      </Tag>
-                    </Option>
-                  ))}
-                </Select>
-              </Col>
-              
-              <Col xs={24} sm={12} md={8} lg={6}>
-                <Select
-                  mode="multiple"
-                  placeholder="Filter by Jira status"
-                  value={filters.jiraStatus}
-                  onChange={(value) => updateFilter('jiraStatus', value)}
-                  style={{ width: '100%' }}
-                  allowClear
-                >
-                  {uniqueValues.jiraStatuses.map(status => (
-                    <Option key={status} value={status}>
-                      <Tag color={getStatusColor(status)} size="small">
-                        {status?.toUpperCase()}
-                      </Tag>
-                    </Option>
-                  ))}
-                </Select>
-              </Col>
-
-              {/* Advanced Filters */}
-              {showAdvancedFilters && (
-                <>
-                  <Col xs={24} sm={12} md={8} lg={6}>
-                    <Input
-                      placeholder="Search cluster..."
-                      prefix={<SearchOutlined />}
-                      value={filters.cluster}
-                      onChange={(e) => updateFilter('cluster', e.target.value)}
-                      allowClear
-                    />
-                  </Col>
-                  
-                  <Col xs={24} sm={12} md={8} lg={6}>
-                    <Input
-                      placeholder="Search Jira assignee..."
-                      prefix={<UserOutlined />}
-                      value={filters.assignee}
-                      onChange={(e) => updateFilter('assignee', e.target.value)}
-                      allowClear
-                    />
-                  </Col>
-                  
-                  <Col xs={24} sm={12} md={8} lg={6}>
-                    <Input
-                      placeholder="Search acknowledged by..."
-                      prefix={<CheckOutlined />}
-                      value={filters.acknowledgedBy}
-                      onChange={(e) => updateFilter('acknowledgedBy', e.target.value)}
-                      allowClear
-                    />
-                  </Col>
-                  
-                  <Col xs={24} sm={12} md={8} lg={6}>
-                    <Input
-                      placeholder="Search resolved by..."
-                      prefix={<CloseOutlined />}
-                      value={filters.resolvedBy}
-                      onChange={(e) => updateFilter('resolvedBy', e.target.value)}
-                      allowClear
-                    />
-                  </Col>
-                  
-                  <Col xs={24} sm={12} md={8} lg={6}>
-                    <Input
-                      placeholder="Search Jira issue..."
-                      prefix={<LinkOutlined />}
-                      value={filters.jiraIssueKey}
-                      onChange={(e) => updateFilter('jiraIssueKey', e.target.value)}
-                      allowClear
-                    />
-                  </Col>
-                  
-                  <Col xs={24} sm={12} md={8} lg={6}>
-                    <RangePicker
-                      placeholder={['Start date', 'End date']}
-                      value={filters.dateRange}
-                      onChange={(dates) => updateFilter('dateRange', dates)}
-                      style={{ width: '100%' }}
-                      allowClear
-                    />
-                  </Col>
-                </>
-              )}
-            </Row>
-          </Card>
-
-          {/* Action Bar */}
-          <div style={{ marginBottom: 16 }}>
+      {/* Status Summary Card */}
+      <Card size="small" style={{ marginBottom: 16 }}>
+        <Row gutter={16} align="middle">
+          <Col xs={24} sm={12} md={16} lg={18}>
             <Space wrap>
-              <Button
-                type="primary"
-                icon={<CheckOutlined />}
-                onClick={() => setAcknowledgeModalVisible(true)}
-                disabled={selectedRowKeys.length === 0}
-              >
-                Acknowledge in Jira ({selectedRowKeys.length})
-              </Button>
-              <Button
-                type="primary"
-                danger
-                icon={<CloseOutlined />}
-                onClick={() => setResolveModalVisible(true)}
-                disabled={selectedRowKeys.length === 0}
-              >
-                Resolve in Jira ({selectedRowKeys.length})
-              </Button>
-
-              <BulkOperations
-                selectedAlerts={selectedRowKeys}
-                onAcknowledge={onAcknowledge}
-                onResolve={onResolve}
-                onClearSelection={() => setSelectedRowKeys([])}
-                alerts={alerts}
-              />
-
+              <Badge count={stats.total} showZero color="#1890ff">
+                <Tag>Total Alerts</Tag>
+              </Badge>
+              <Badge count={stats.matched} showZero color="#52c41a">
+                <Tag>JSM Matched</Tag>
+              </Badge>
+              <Badge count={stats.unmatched} showZero color="#fa8c16">
+                <Tag>Unmatched</Tag>
+              </Badge>
+              <Badge count={stats.acknowledged} showZero color="#1890ff">
+                <Tag>Acknowledged</Tag>
+              </Badge>
+              <Badge count={stats.critical} showZero color="#ff4d4f">
+                <Tag>Critical</Tag>
+              </Badge>
+              {selectedRowKeys.length > 0 && (
+                <Badge count={selectedRowKeys.length} showZero color="#722ed1">
+                  <Tag>Selected</Tag>
+                </Badge>
+              )}
+            </Space>
+          </Col>
+          <Col xs={24} sm={12} md={8} lg={6} style={{ textAlign: 'right' }}>
+            <Space>
               <Button
                 icon={<SyncOutlined />}
                 onClick={onSync}
                 loading={loading}
+                type="primary"
               >
-                Sync Alerts
+                Sync with JSM
               </Button>
-
-              <div style={{ marginLeft: 16 }}>
-                <Space>
-                  <Tag color="orange" icon={<ExclamationCircleOutlined />}>
-                    {unacknowledgedCount} Unacknowledged
-                  </Tag>
-                  <Tag color="red" icon={<ExclamationCircleOutlined />}>
-                    {unresolvedCount} Unresolved
-                  </Tag>
-                  {withoutJiraTickets > 0 && (
-                    <Tag color="gold" icon={<ExclamationCircleOutlined />}>
-                      {withoutJiraTickets} No Jira Ticket
-                    </Tag>
-                  )}
-                  {totalFilteredCount !== totalCount && (
-                    <Tag color="blue" icon={<FilterOutlined />}>
-                      Filtered: {totalFilteredCount}/{totalCount}
-                    </Tag>
-                  )}
-                </Space>
-              </div>
             </Space>
-          </div>
+          </Col>
+        </Row>
+      </Card>
 
-          <Table
-            columns={columns}
-            dataSource={filteredAlerts}
-            rowKey="id"
-            rowSelection={{
-              selectedRowKeys,
-              onChange: setSelectedRowKeys,
-              getCheckboxProps: (record) => ({
-                disabled: record.jira_status === 'resolved' || record.grafana_status === 'resolved',
-              }),
-            }}
-            loading={loading}
-            pagination={{
-              pageSize: 50,
-              showSizeChanger: true,
-              pageSizeOptions: ['10', '25', '50', '100', '200'],
-              showQuickJumper: true,
-              showTotal: (total, range) => 
-                `${range[0]}-${range[1]} of ${total} alerts${totalFilteredCount !== totalCount ? ` (filtered from ${totalCount})` : ''}`,
-            }}
-            scroll={{ x: 1600 }}
-            size="small"
-          />
-        </TabPane>
-      </Tabs>
+      {/* Filter Panel */}
+      <Card 
+        title={
+          <Space>
+            <FilterOutlined />
+            Filters & Search
+            <Tag color={filteredAlerts.length !== alerts.length ? 'blue' : 'default'}>
+              {filteredAlerts.length} of {alerts.length} alerts
+            </Tag>
+          </Space>
+        }
+        extra={
+          <Space>
+            <Switch
+              checkedChildren="Advanced"
+              unCheckedChildren="Simple"
+              checked={showAdvancedFilters}
+              onChange={setShowAdvancedFilters}
+            />
+            <Button 
+              icon={<ClearOutlined />} 
+              onClick={clearFilters}
+            >
+              Clear Filters
+            </Button>
+          </Space>
+        }
+        style={{ marginBottom: 16 }}
+      >
+        <Row gutter={[16, 16]}>
+          {/* Basic Filters */}
+          <Col xs={24} sm={12} md={8} lg={6}>
+            <Input
+              ref={searchInputRef}
+              placeholder="Search alert name..."
+              prefix={<SearchOutlined />}
+              value={filters.alertName}
+              onChange={(e) => updateFilter('alertName', e.target.value)}
+              allowClear
+            />
+          </Col>
+          
+          <Col xs={24} sm={12} md={8} lg={6}>
+            <Select
+              mode="multiple"
+              placeholder="Filter by severity"
+              value={filters.severity}
+              onChange={(value) => updateFilter('severity', value)}
+              style={{ width: '100%' }}
+              allowClear
+            >
+              {uniqueValues.severities.map(severity => (
+                <Option key={severity} value={severity}>
+                  <Tag color={getSeverityColor(severity)} size="small">
+                    {severity?.toUpperCase()}
+                  </Tag>
+                </Option>
+              ))}
+            </Select>
+          </Col>
+          
+          <Col xs={24} sm={12} md={8} lg={6}>
+            <Select
+              mode="multiple"
+              placeholder="Filter by JSM status"
+              value={filters.jsmStatus}
+              onChange={(value) => updateFilter('jsmStatus', value)}
+              style={{ width: '100%' }}
+              allowClear
+            >
+              {uniqueValues.jsmStatuses.map(status => (
+                <Option key={status} value={status}>
+                  <Tag color={getStatusColor(status)} size="small">
+                    {status?.toUpperCase()}
+                  </Tag>
+                </Option>
+              ))}
+            </Select>
+          </Col>
+          
+          <Col xs={24} sm={12} md={8} lg={6}>
+            <Select
+              mode="multiple"
+              placeholder="Filter by match type"
+              value={filters.matchType}
+              onChange={(value) => updateFilter('matchType', value)}
+              style={{ width: '100%' }}
+              allowClear
+            >
+              {uniqueValues.matchTypes.map(type => (
+                <Option key={type} value={type}>
+                  <Tag color={getMatchTypeColor(type)} size="small">
+                    {type}
+                  </Tag>
+                </Option>
+              ))}
+            </Select>
+          </Col>
 
-      {/* CSV Export Modal */}
-      <CSVExportModal
-        visible={csvExportModalVisible}
-        onCancel={() => setCsvExportModalVisible(false)}
-        alerts={filteredAlerts}
+          {/* Advanced Filters */}
+          {showAdvancedFilters && (
+            <>
+              <Col xs={24} sm={12} md={8} lg={6}>
+                <Input
+                  placeholder="Search cluster..."
+                  prefix={<SearchOutlined />}
+                  value={filters.cluster}
+                  onChange={(e) => updateFilter('cluster', e.target.value)}
+                  allowClear
+                />
+              </Col>
+              
+              <Col xs={24} sm={12} md={8} lg={6}>
+                <Input
+                  placeholder="Search JSM owner..."
+                  prefix={<UserOutlined />}
+                  value={filters.owner}
+                  onChange={(e) => updateFilter('owner', e.target.value)}
+                  allowClear
+                />
+              </Col>
+              
+              <Col xs={24} sm={12} md={8} lg={6}>
+                <RangePicker
+                  placeholder={['Start date', 'End date']}
+                  value={filters.dateRange}
+                  onChange={(dates) => updateFilter('dateRange', dates)}
+                  style={{ width: '100%' }}
+                  allowClear
+                />
+              </Col>
+            </>
+          )}
+        </Row>
+      </Card>
+
+      {/* Action Bar */}
+      <div style={{ marginBottom: 16 }}>
+        <Space wrap>
+          <Button
+            type="primary"
+            icon={<CheckOutlined />}
+            onClick={() => setAcknowledgeModalVisible(true)}
+            disabled={selectedRowKeys.length === 0}
+          >
+            Acknowledge in JSM ({selectedRowKeys.length})
+          </Button>
+          
+          <Button
+            type="primary"
+            danger
+            icon={<CloseOutlined />}
+            onClick={() => setResolveModalVisible(true)}
+            disabled={selectedRowKeys.length === 0}
+          >
+            Close in JSM ({selectedRowKeys.length})
+          </Button>
+
+          <Button
+            onClick={() => setSelectedRowKeys([])}
+            disabled={selectedRowKeys.length === 0}
+          >
+            Clear Selection
+          </Button>
+        </Space>
+      </div>
+
+      <Table
+        columns={columns}
+        dataSource={filteredAlerts}
+        rowKey="id"
+        rowSelection={{
+          selectedRowKeys,
+          onChange: setSelectedRowKeys,
+          getCheckboxProps: (record) => ({
+            disabled: record.is_resolved,
+          }),
+        }}
+        loading={loading}
+        pagination={{
+          pageSize: 50,
+          showSizeChanger: true,
+          pageSizeOptions: ['10', '25', '50', '100', '200'],
+          showQuickJumper: true,
+          showTotal: (total, range) => 
+            `${range[0]}-${range[1]} of ${total} alerts${filteredAlerts.length !== alerts.length ? ` (filtered from ${alerts.length})` : ''}`,
+        }}
+        scroll={{ x: 1800 }}
+        size="small"
       />
 
-      {/* Keyboard Shortcuts Help Modal */}
-      {renderHelpModal()}
-
+      {/* Alert Details Modal */}
       <Modal
-        title="Acknowledge Alerts in Jira"
+        title={
+          <Space>
+            <InfoCircleOutlined />
+            Alert Details
+            {selectedAlert?.jsm_alert_id && (
+              <Tag color="blue">JSM Alert</Tag>
+            )}
+          </Space>
+        }
+        open={detailModalVisible}
+        onCancel={() => setDetailModalVisible(false)}
+        width={800}
+        footer={
+          <Space>
+            <Button onClick={() => setDetailModalVisible(false)}>
+              Close
+            </Button>
+            {selectedAlert?.generator_url && (
+              <Button 
+                type="primary"
+                onClick={() => window.open(selectedAlert.generator_url, '_blank')}
+              >
+                View in Grafana
+              </Button>
+            )}
+            {selectedAlert?.jsm_alert_id && getJSMUrl(selectedAlert) && (
+              <Button 
+                type="primary"
+                onClick={() => window.open(getJSMUrl(selectedAlert), '_blank')}
+              >
+                View in JSM
+              </Button>
+            )}
+          </Space>
+        }
+      >
+        {selectedAlert && (
+          <div>
+            {/* Basic Alert Info */}
+            <Card size="small" title="Alert Information" style={{ marginBottom: 16 }}>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <div><strong>Name:</strong> {selectedAlert.alert_name}</div>
+                  <div><strong>Cluster:</strong> {selectedAlert.cluster || 'N/A'}</div>
+                  <div><strong>Pod:</strong> {selectedAlert.pod || 'N/A'}</div>
+                  <div><strong>Severity:</strong> <Tag color={getSeverityColor(selectedAlert.severity)}>{selectedAlert.severity}</Tag></div>
+                </Col>
+                <Col span={12}>
+                  <div><strong>Grafana Status:</strong> <Tag color={getStatusColor(selectedAlert.grafana_status)}>{selectedAlert.grafana_status}</Tag></div>
+                  <div><strong>Started:</strong> {selectedAlert.started_at ? moment(selectedAlert.started_at).format('YYYY-MM-DD HH:mm:ss') : 'N/A'}</div>
+                  <div><strong>Created:</strong> {moment(selectedAlert.created_at).format('YYYY-MM-DD HH:mm:ss')}</div>
+                </Col>
+              </Row>
+              {selectedAlert.summary && (
+                <div style={{ marginTop: 12 }}>
+                  <strong>Summary:</strong>
+                  <div style={{ marginTop: 4, padding: 8, background: '#f6f8fa', borderRadius: 4 }}>
+                    {selectedAlert.summary}
+                  </div>
+                </div>
+              )}
+            </Card>
+
+            {/* JSM Information */}
+            {selectedAlert.jsm_alert_id ? (
+              <Card size="small" title="JSM Alert Information" style={{ marginBottom: 16 }}>
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <div><strong>JSM Alert ID:</strong> {selectedAlert.jsm_tiny_id || selectedAlert.jsm_alert_id}</div>
+                    <div><strong>JSM Status:</strong> <Tag color={getStatusColor(selectedAlert.jsm_status)}>{selectedAlert.jsm_status}</Tag></div>
+                    <div><strong>Priority:</strong> {selectedAlert.jsm_priority || 'N/A'}</div>
+                    <div><strong>Owner:</strong> {selectedAlert.jsm_owner || 'Unassigned'}</div>
+                  </Col>
+                  <Col span={12}>
+                    <div><strong>Acknowledged:</strong> {selectedAlert.jsm_acknowledged ? 'Yes' : 'No'}</div>
+                    <div><strong>Source:</strong> {selectedAlert.jsm_source || 'N/A'}</div>
+                    <div><strong>Count:</strong> {selectedAlert.jsm_count || 1}</div>
+                    <div><strong>Integration:</strong> {selectedAlert.jsm_integration_name || 'N/A'}</div>
+                  </Col>
+                </Row>
+                <div style={{ marginTop: 12 }}>
+                  <strong>Match Information:</strong>
+                  <div style={{ marginTop: 4 }}>
+                    <Tag color={getMatchTypeColor(selectedAlert.match_type)}>
+                      Type: {selectedAlert.match_type}
+                    </Tag>
+                    <Tag color="blue">
+                      Confidence: {selectedAlert.match_confidence}%
+                    </Tag>
+                  </div>
+                </div>
+                {selectedAlert.jsm_tags && selectedAlert.jsm_tags.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <strong>JSM Tags:</strong>
+                    <div style={{ marginTop: 4 }}>
+                      {selectedAlert.jsm_tags.slice(0, 10).map((tag, index) => (
+                        <Tag key={index} size="small" style={{ margin: '2px' }}>
+                          {tag}
+                        </Tag>
+                      ))}
+                      {selectedAlert.jsm_tags.length > 10 && (
+                        <Tag size="small">+{selectedAlert.jsm_tags.length - 10} more</Tag>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </Card>
+            ) : (
+              <Card size="small" title="JSM Matching" style={{ marginBottom: 16 }}>
+                <div style={{ textAlign: 'center', padding: 20, color: '#999' }}>
+                  <ExclamationCircleOutlined style={{ fontSize: 24, marginBottom: 8 }} />
+                  <div>No matching JSM alert found</div>
+                  <div style={{ fontSize: '12px' }}>
+                    This alert exists only in Grafana or the matching confidence was too low
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {/* Actions Taken */}
+            {(selectedAlert.acknowledged_by || selectedAlert.resolved_by) && (
+              <Card size="small" title="Actions Taken">
+                {selectedAlert.acknowledged_by && (
+                  <div>
+                    <CheckOutlined style={{ color: '#52c41a', marginRight: 8 }} />
+                    <strong>Acknowledged by:</strong> {selectedAlert.acknowledged_by}
+                    {selectedAlert.acknowledged_at && (
+                      <span style={{ marginLeft: 8, color: '#666' }}>
+                        on {moment(selectedAlert.acknowledged_at).format('YYYY-MM-DD HH:mm:ss')}
+                      </span>
+                    )}
+                  </div>
+                )}
+                {selectedAlert.resolved_by && (
+                  <div style={{ marginTop: 8 }}>
+                    <CloseOutlined style={{ color: '#52c41a', marginRight: 8 }} />
+                    <strong>Resolved by:</strong> {selectedAlert.resolved_by}
+                    {selectedAlert.resolved_at && (
+                      <span style={{ marginLeft: 8, color: '#666' }}>
+                        on {moment(selectedAlert.resolved_at).format('YYYY-MM-DD HH:mm:ss')}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </Card>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* Acknowledge Modal */}
+      <Modal
+        title="Acknowledge Alerts in JSM"
         open={acknowledgeModalVisible}
         onOk={handleAcknowledge}
         onCancel={() => {
           setAcknowledgeModalVisible(false);
           acknowledgeForm.resetFields();
         }}
-        okText="Acknowledge"
+        okText="Acknowledge in JSM"
       >
-        <p>Are you sure you want to acknowledge {selectedRowKeys.length} alert(s) in Jira?</p>
-        <p>This will transition the existing Jira issues to the acknowledged status.</p>
-        <Form form={acknowledgeForm} layout="vertical">
-          <Form.Item
-            name="acknowledged_by"
-            label="Your Name"
-            rules={[{ required: true, message: 'Please enter your name' }]}
-            initialValue={localStorage.getItem('alertManager_username') || ''}
-          >
-            <Input placeholder="Enter your name" />
-          </Form.Item>
-          <Form.Item name="note" label="Note (optional)">
+        <p>Are you sure you want to acknowledge {selectedRowKeys.length} alert(s) in JSM?</p>
+        <p>This will transition the JSM alerts to acknowledged status.</p>
+        <div>
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: 'block', marginBottom: 8, fontWeight: 'bold' }}>Your Name</label>
+            <Input 
+              placeholder="Enter your name" 
+              defaultValue={localStorage.getItem('alertManager_username') || ''}
+              onChange={(e) => acknowledgeForm.setFieldsValue({ acknowledged_by: e.target.value })}
+            />
+          </div>
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: 'block', marginBottom: 8, fontWeight: 'bold' }}>Note (optional)</label>
             <TextArea
               placeholder="Add a note (optional)"
               rows={3}
+              onChange={(e) => acknowledgeForm.setFieldsValue({ note: e.target.value })}
             />
-          </Form.Item>
-        </Form>
+          </div>
+        </div>
       </Modal>
 
+      {/* Resolve Modal */}
       <Modal
-        title="Resolve Alerts in Jira"
+        title="Close Alerts in JSM"
         open={resolveModalVisible}
         onOk={handleResolve}
         onCancel={() => {
           setResolveModalVisible(false);
           resolveForm.resetFields();
         }}
-        okText="Resolve"
+        okText="Close in JSM"
         okButtonProps={{ danger: true }}
       >
-        <p>Are you sure you want to resolve {selectedRowKeys.length} alert(s) in Jira?</p>
-        <p>This will transition the existing Jira issues to the resolved status and mark them as resolved in the system.</p>
+        <p>Are you sure you want to close {selectedRowKeys.length} alert(s) in JSM?</p>
+        <p>This will close the JSM alerts and mark them as resolved in the system.</p>
         <Form form={resolveForm} layout="vertical">
           <Form.Item
             name="resolved_by"

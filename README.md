@@ -1,4 +1,4 @@
-# Grafana-Jira Alert Manager
+# Devo Alert Manager
 
 A full-stack application that automatically syncs alerts from Grafana to Jira Service Management, enabling seamless incident management workflow.
 
