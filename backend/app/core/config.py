@@ -21,18 +21,18 @@ class Settings(BaseSettings):
     JSM_API_BASE_URL: str = "https://api.atlassian.com/jsm/ops/api"
     JSM_ALERTS_LIMIT: int = 500                      # Max alerts to fetch per request
     
-    # Alert Matching Configuration
-    ALERT_MATCH_CONFIDENCE_THRESHOLD: float = 50.0   # Minimum confidence for auto-matching
-    ALERT_MATCH_TIME_WINDOW_MINUTES: int = 15        # Time window for matching alerts
+    # Alert Matching Configuration (Updated for better matching)
+    ALERT_MATCH_CONFIDENCE_THRESHOLD: float = 30.0   # Lowered for more matches (was 50.0)
+    ALERT_MATCH_TIME_WINDOW_MINUTES: int = 60        # Increased time window (was 15)
     
     # Sync Configuration
-    GRAFANA_SYNC_INTERVAL_SECONDS: int = 300         # Sync every 5 minutes (reduced from 10 minutes)
+    GRAFANA_SYNC_INTERVAL_SECONDS: int = 300         # Sync every 5 minutes
     JSM_SYNC_INTERVAL_SECONDS: int = 300             # Sync JSM alerts every 5 minutes
     
-    # Alert Filtering
+    # Alert Filtering (Updated for better production filtering)
     FILTER_NON_PROD_ALERTS: bool = True              # Filter out non-production alerts
-    EXCLUDED_CLUSTERS: list = ["stage", "dev", "test"] # Clusters to exclude
-    EXCLUDED_ENVIRONMENTS: list = ["devo-stage-eu"]  # Environments to exclude
+    EXCLUDED_CLUSTERS: list = ["stage", "dev", "test", "staging", "development"]  # Extended list
+    EXCLUDED_ENVIRONMENTS: list = ["devo-stage-eu", "staging", "development", "dev"]  # Extended list
     
     # App
     DEBUG: bool = False
@@ -47,10 +47,27 @@ class Settings(BaseSettings):
     JIRA_ACKNOWLEDGE_TRANSITION_NAME: str = "To Do" # Not used in JSM mode
     JIRA_RESOLVE_TRANSITION_NAME: str = "Completed" # Not used in JSM mode
     
-    # Feature Flags
+    # Feature Flags (Updated)
     USE_JSM_MODE: bool = True                        # Use JSM API instead of Jira issues
     ENABLE_AUTO_CLOSE: bool = True                   # Auto-close JSM alerts when Grafana resolves
-    ENABLE_MATCH_LOGGING: bool = False               # Log detailed matching information
+    ENABLE_MATCH_LOGGING: bool = True                # Enable detailed matching logs for debugging
+    
+    # Enhanced Matching Settings
+    ENABLE_FUZZY_MATCHING: bool = True               # Enable fuzzy string matching
+    ENABLE_TIME_PROXIMITY_MATCHING: bool = True     # Use time proximity for matching
+    ENABLE_CONTENT_SIMILARITY_MATCHING: bool = True # Use content similarity for matching
+    
+    # Matching Weights (for fine-tuning matching algorithm)
+    MATCH_WEIGHT_ALERT_NAME: int = 40               # Weight for alert name matching
+    MATCH_WEIGHT_CLUSTER: int = 25                  # Weight for cluster matching
+    MATCH_WEIGHT_SEVERITY: int = 15                 # Weight for severity matching
+    MATCH_WEIGHT_CONTENT: int = 20                  # Weight for content similarity
+    MATCH_WEIGHT_TIME_PROXIMITY: int = 10           # Weight for time proximity
+    MATCH_WEIGHT_SOURCE: int = 15                   # Weight for JSM source being Grafana
+    
+    # Performance Settings
+    MAX_ALERTS_TO_PROCESS: int = 5000               # Max alerts to process in one sync
+    BATCH_SIZE_ALERTS: int = 100                    # Process alerts in batches
     
     class Config:
         env_file = ".env"

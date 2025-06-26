@@ -5,6 +5,7 @@ from sqlalchemy.exc import ProgrammingError
 from ..core.database import SessionLocal
 from ..models.config import CronConfig
 from .alert_service import AlertService
+import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ class SchedulerService:
         try:
             trigger = CronTrigger.from_crontab(config.cron_expression)
             self.scheduler.add_job(
-                func=self._sync_alerts_job,
+                func=self._sync_alerts_job_wrapper,
                 trigger=trigger,
                 id=f"job_{config.job_name}",
                 replace_existing=True
@@ -57,15 +58,33 @@ class SchedulerService:
         except Exception as e:
             logger.error(f"❌ Error adding job {config.job_name}: {e}")
     
-    async def _sync_alerts_job(self):
-        """Job function to sync alerts"""
-        db = SessionLocal()
+    def _sync_alerts_job_wrapper(self):
+        """Wrapper to run async job in sync context"""
         try:
             logger.info("🔄 Running scheduled JSM alert sync...")
-            await self.alert_service.sync_alerts(db)
-            logger.info("✅ Scheduled JSM alert sync completed")
+            
+            # Create new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                # Run the async sync job
+                loop.run_until_complete(self._sync_alerts_job())
+                logger.info("✅ Scheduled JSM alert sync completed")
+            finally:
+                loop.close()
+                
         except Exception as e:
             logger.error(f"❌ Error in scheduled alert sync: {e}")
+    
+    async def _sync_alerts_job(self):
+        """Async job function to sync alerts"""
+        db = SessionLocal()
+        try:
+            await self.alert_service.sync_alerts(db)
+        except Exception as e:
+            logger.error(f"❌ Error in alert sync job: {e}")
+            raise
         finally:
             db.close()
     
@@ -88,3 +107,20 @@ class SchedulerService:
             logger.info(f"🗑️  Removed job {job_name}")
         except Exception as e:
             logger.error(f"❌ Error removing job {job_name}: {e}")
+    
+    def get_job_status(self) -> dict:
+        """Get status of all scheduled jobs"""
+        jobs = []
+        for job in self.scheduler.get_jobs():
+            jobs.append({
+                'id': job.id,
+                'name': job.name or job.id,
+                'next_run': job.next_run_time.isoformat() if job.next_run_time else None,
+                'trigger': str(job.trigger)
+            })
+        
+        return {
+            'scheduler_running': self.scheduler.running,
+            'jobs_count': len(jobs),
+            'jobs': jobs
+        }

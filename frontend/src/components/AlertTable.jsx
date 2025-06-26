@@ -18,7 +18,8 @@ import {
   Switch,
   Tabs,
   Badge,
-  Progress
+  Progress,
+  Alert
 } from 'antd';
 import { 
   CheckOutlined, 
@@ -37,7 +38,10 @@ import {
   ApiOutlined,
   EyeOutlined,
   InfoCircleOutlined,
-  ThunderboltOutlined
+  ThunderboltOutlined,
+  CheckCircleOutlined,
+  FireOutlined,
+  WarningOutlined
 } from '@ant-design/icons';
 import moment from 'moment';
 
@@ -177,12 +181,22 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
 
   const getMatchTypeColor = (matchType) => {
     const colors = {
-      alias: 'green',
-      tags_and_content: 'blue',
-      content_similarity: 'orange',
-      none: 'red'
+      high_confidence: 'green',
+      content_similarity: 'blue',
+      low_confidence: 'orange',
+      none: 'default'
     };
     return colors[matchType] || 'default';
+  };
+
+  const getMatchTypeIcon = (matchType) => {
+    const icons = {
+      high_confidence: <CheckCircleOutlined />,
+      content_similarity: <ApiOutlined />,
+      low_confidence: <WarningOutlined />,
+      none: <ExclamationCircleOutlined />
+    };
+    return icons[matchType] || <QuestionCircleOutlined />;
   };
 
   const showAlertDetails = (alert) => {
@@ -192,9 +206,9 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
 
   const getJSMUrl = (alert) => {
     if (alert.jsm_alert_id) {
-      // Construct JSM alert URL - this may need adjustment based on your JSM setup
+      // Construct JSM alert URL
       const baseUrl = process.env.REACT_APP_JIRA_URL || 'https://devoinc.atlassian.net';
-      return `${baseUrl}/servicedesk/alerts/${alert.jsm_alert_id}`;
+      return `${baseUrl}/plugins/servlet/ac/com.atlassian.jira.plugins.jira-opsgenie-plugin/opsgenie-alert-details?alertId=${alert.jsm_alert_id}`;
     }
     return null;
   };
@@ -256,23 +270,25 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
         <div>
           <div style={{ marginBottom: '4px' }}>
             {record.jsm_status ? (
-              <Tag color={getStatusColor(record.jsm_status)}>
-                JSM: {record.jsm_status?.toUpperCase()}
-              </Tag>
+              <Space>
+                <Tag color={getStatusColor(record.jsm_status)}>
+                  JSM: {record.jsm_status?.toUpperCase()}
+                </Tag>
+                {record.jsm_acknowledged && (
+                  <Tag color="blue" size="small">
+                    ACK
+                  </Tag>
+                )}
+              </Space>
             ) : (
               <Tag color="default">No JSM Alert</Tag>
-            )}
-            {record.jsm_acknowledged && (
-              <Tag color="blue" size="small" style={{ marginLeft: '4px' }}>
-                ACK
-              </Tag>
             )}
           </div>
           <div>
             <Tag 
               color={getMatchTypeColor(record.match_type)} 
               size="small"
-              icon={record.match_type !== 'none' ? <ApiOutlined /> : <ExclamationCircleOutlined />}
+              icon={getMatchTypeIcon(record.match_type)}
             >
               {record.match_type || 'none'}: {record.match_confidence || 0}%
             </Tag>
@@ -351,6 +367,11 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
               {record.jsm_priority && (
                 <div style={{ fontSize: '10px', color: '#999' }}>
                   Priority: {record.jsm_priority}
+                </div>
+              )}
+              {record.jsm_count > 1 && (
+                <div style={{ fontSize: '10px', color: '#1890ff' }}>
+                  Count: {record.jsm_count}
                 </div>
               )}
             </div>
@@ -469,14 +490,32 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
     const matched = filteredAlerts.filter(a => a.jsm_alert_id).length;
     const unmatched = filteredAlerts.length - matched;
     const acknowledged = filteredAlerts.filter(a => a.jsm_acknowledged || a.acknowledged_by).length;
-    const resolved = filteredAlerts.filter(a => a.is_resolved).length;
+    const resolved = filteredAlerts.filter(a => a.grafana_status === 'resolved').length;
     const critical = filteredAlerts.filter(a => a.severity === 'critical' && a.grafana_status === 'active').length;
+    const matchRate = filteredAlerts.length > 0 ? Math.round((matched / filteredAlerts.length) * 100) : 0;
     
-    return { matched, unmatched, acknowledged, resolved, critical, total: filteredAlerts.length };
+    return { matched, unmatched, acknowledged, resolved, critical, total: filteredAlerts.length, matchRate };
   }, [filteredAlerts]);
 
   return (
     <div>
+      {/* JSM Integration Status */}
+      {stats.total > 0 && (
+        <Alert
+          message={`JSM Integration Status: ${stats.matched}/${stats.total} alerts matched (${stats.matchRate}%)`}
+          description={
+            stats.matchRate < 50 
+              ? "Low match rate detected. Consider checking JSM alert configuration and matching thresholds."
+              : stats.matchRate > 80 
+              ? "Excellent JSM integration! Most alerts are properly matched."
+              : "Good JSM integration. Most alerts are being matched with JSM."
+          }
+          type={stats.matchRate < 50 ? "warning" : stats.matchRate > 80 ? "success" : "info"}
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+      )}
+
       {/* Status Summary Card */}
       <Card size="small" style={{ marginBottom: 16 }}>
         <Row gutter={16} align="middle">
@@ -610,7 +649,7 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
             >
               {uniqueValues.matchTypes.map(type => (
                 <Option key={type} value={type}>
-                  <Tag color={getMatchTypeColor(type)} size="small">
+                  <Tag color={getMatchTypeColor(type)} size="small" icon={getMatchTypeIcon(type)}>
                     {type}
                   </Tag>
                 </Option>
@@ -694,7 +733,7 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
           selectedRowKeys,
           onChange: setSelectedRowKeys,
           getCheckboxProps: (record) => ({
-            disabled: record.is_resolved,
+            disabled: record.grafana_status === 'resolved',
           }),
         }}
         loading={loading}
@@ -719,6 +758,11 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
             {selectedAlert?.jsm_alert_id && (
               <Tag color="blue">JSM Alert</Tag>
             )}
+            {selectedAlert?.match_type && selectedAlert.match_type !== 'none' && (
+              <Tag color={getMatchTypeColor(selectedAlert.match_type)}>
+                {selectedAlert.match_confidence}% match
+              </Tag>
+            )}
           </Space>
         }
         open={detailModalVisible}
@@ -740,6 +784,7 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
             {selectedAlert?.jsm_alert_id && getJSMUrl(selectedAlert) && (
               <Button 
                 type="primary"
+                icon={<ThunderboltOutlined />}
                 onClick={() => window.open(getJSMUrl(selectedAlert), '_blank')}
               >
                 View in JSM
@@ -795,7 +840,7 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
                 <div style={{ marginTop: 12 }}>
                   <strong>Match Information:</strong>
                   <div style={{ marginTop: 4 }}>
-                    <Tag color={getMatchTypeColor(selectedAlert.match_type)}>
+                    <Tag color={getMatchTypeColor(selectedAlert.match_type)} icon={getMatchTypeIcon(selectedAlert.match_type)}>
                       Type: {selectedAlert.match_type}
                     </Tag>
                     <Tag color="blue">
@@ -825,7 +870,7 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
                   <ExclamationCircleOutlined style={{ fontSize: 24, marginBottom: 8 }} />
                   <div>No matching JSM alert found</div>
                   <div style={{ fontSize: '12px' }}>
-                    This alert exists only in Grafana or the matching confidence was too low
+                    This alert exists only in Grafana or the matching confidence was below the threshold ({selectedAlert.match_confidence || 0}%)
                   </div>
                 </div>
               </Card>
@@ -875,24 +920,22 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       >
         <p>Are you sure you want to acknowledge {selectedRowKeys.length} alert(s) in JSM?</p>
         <p>This will transition the JSM alerts to acknowledged status.</p>
-        <div>
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'block', marginBottom: 8, fontWeight: 'bold' }}>Your Name</label>
-            <Input 
-              placeholder="Enter your name" 
-              defaultValue={localStorage.getItem('alertManager_username') || ''}
-              onChange={(e) => acknowledgeForm.setFieldsValue({ acknowledged_by: e.target.value })}
-            />
-          </div>
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'block', marginBottom: 8, fontWeight: 'bold' }}>Note (optional)</label>
+        <Form form={acknowledgeForm} layout="vertical">
+          <Form.Item
+            name="acknowledged_by"
+            label="Your Name"
+            rules={[{ required: true, message: 'Please enter your name' }]}
+            initialValue={localStorage.getItem('alertManager_username') || ''}
+          >
+            <Input placeholder="Enter your name" />
+          </Form.Item>
+          <Form.Item name="note" label="Note (optional)">
             <TextArea
               placeholder="Add a note (optional)"
               rows={3}
-              onChange={(e) => acknowledgeForm.setFieldsValue({ note: e.target.value })}
             />
-          </div>
-        </div>
+          </Form.Item>
+        </Form>
       </Modal>
 
       {/* Resolve Modal */}

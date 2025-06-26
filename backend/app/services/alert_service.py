@@ -5,6 +5,7 @@ from ..models.alert import Alert
 from ..schemas.alert import AlertCreate, AlertUpdate
 from .grafana_service import GrafanaService
 from .jsm_service import JSMService
+from ..core.config import settings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -31,16 +32,19 @@ class AlertService:
     
     def _is_non_prod_alert(self, alert_data: dict) -> bool:
         """Check if alert is from non-production environment and should be filtered out"""
+        if not settings.FILTER_NON_PROD_ALERTS:
+            return False
+            
         labels = alert_data.get('labels', {})
         
-        cluster = labels.get('cluster', '')
-        if 'stage' in cluster.lower():
-            logger.debug(f"Filtering out stage cluster alert: {cluster}")
+        cluster = labels.get('cluster', '').lower()
+        if any(excluded.lower() in cluster for excluded in settings.EXCLUDED_CLUSTERS):
+            logger.debug(f"Filtering out non-prod cluster alert: {cluster}")
             return True
         
-        env = labels.get('env', '')
-        if env == 'devo-stage-eu':
-            logger.debug(f"Filtering out devo-stage-eu alert: {env}")
+        env = labels.get('env', '').lower()
+        if any(excluded.lower() in env for excluded in settings.EXCLUDED_ENVIRONMENTS):
+            logger.debug(f"Filtering out non-prod environment alert: {env}")
             return True
         
         return False
@@ -48,13 +52,13 @@ class AlertService:
     async def sync_alerts(self, db: Session):
         """Sync alerts from Grafana and JSM, then match them"""
         try:
-            logger.info("Starting alert synchronization with Grafana and JSM")
+            logger.info("🔄 Starting alert synchronization with Grafana and JSM")
             
             # Fetch alerts from both systems
             grafana_alerts = await self.grafana_service.get_active_alerts()
-            jsm_alerts = await self.jsm_service.get_jsm_alerts(limit=500)
+            jsm_alerts = await self.jsm_service.get_jsm_alerts(limit=settings.JSM_ALERTS_LIMIT)
             
-            logger.info(f"Retrieved {len(grafana_alerts)} Grafana alerts and {len(jsm_alerts)} JSM alerts")
+            logger.info(f"📊 Retrieved {len(grafana_alerts)} Grafana alerts and {len(jsm_alerts)} JSM alerts")
             
             # Filter out non-production alerts from Grafana
             filtered_grafana_alerts = []
@@ -62,14 +66,16 @@ class AlertService:
                 if not self._is_non_prod_alert(alert_data):
                     filtered_grafana_alerts.append(alert_data)
             
-            logger.info(f"After filtering: {len(filtered_grafana_alerts)} production Grafana alerts")
+            if len(filtered_grafana_alerts) != len(grafana_alerts):
+                logger.info(f"🔍 After filtering: {len(filtered_grafana_alerts)} production Grafana alerts (filtered out {len(grafana_alerts) - len(filtered_grafana_alerts)})")
             
             # Match Grafana alerts with JSM alerts
             matched_alerts = self.jsm_service.match_grafana_with_jsm(
                 filtered_grafana_alerts, jsm_alerts
             )
             
-            logger.info(f"Matched {len(matched_alerts)} alert pairs")
+            matches_found = len([m for m in matched_alerts if m['jsm_alert'] is not None])
+            logger.info(f"🎯 Matched {matches_found}/{len(matched_alerts)} alert pairs")
             
             # Track active Grafana alert IDs
             active_grafana_alert_ids = set()
@@ -82,6 +88,7 @@ class AlertService:
                     
                     alert_id = grafana_alert.get('alert_id')
                     if not alert_id:
+                        logger.warning("⚠️  Skipping alert without alert_id")
                         continue
                     
                     active_grafana_alert_ids.add(alert_id)
@@ -92,12 +99,16 @@ class AlertService:
                     if existing_alert:
                         # Update existing alert
                         self._update_existing_alert(existing_alert, grafana_alert, jsm_alert, match_info)
+                        logger.debug(f"🔄 Updated existing alert {alert_id}")
                     else:
                         # Create new alert
-                        self._create_new_alert(db, grafana_alert, jsm_alert, match_info)
+                        new_alert = self._create_new_alert(db, grafana_alert, jsm_alert, match_info)
+                        if new_alert:
+                            match_status = "✅ with JSM match" if jsm_alert else "❌ no JSM match"
+                            logger.info(f"➕ Created new alert {alert_id} {match_status}")
                         
                 except Exception as e:
-                    logger.error(f"Error processing matched alert: {e}")
+                    logger.error(f"❌ Error processing alert: {e}")
                     continue
             
             # Mark resolved alerts (Grafana alerts no longer active)
@@ -107,10 +118,15 @@ class AlertService:
             await self._update_orphaned_jsm_alerts(db, jsm_alerts)
             
             db.commit()
-            logger.info("Alert synchronization completed successfully")
+            logger.info("✅ Alert synchronization completed successfully")
+            
+            # Log summary statistics
+            total_alerts = db.query(Alert).count()
+            matched_alerts_count = db.query(Alert).filter(Alert.jsm_alert_id.isnot(None)).count()
+            logger.info(f"📈 Database summary: {total_alerts} total alerts, {matched_alerts_count} with JSM matches")
             
         except Exception as e:
-            logger.error(f"Critical error in sync_alerts: {e}")
+            logger.error(f"❌ Critical error in sync_alerts: {e}")
             db.rollback()
             raise
     
@@ -122,88 +138,101 @@ class AlertService:
         
         # Update basic Grafana fields
         for field, value in grafana_data.items():
-            if hasattr(alert, field) and field not in ['id', 'created_at']:
+            if hasattr(alert, field) and field not in ['id', 'created_at', 'alert_id']:
                 try:
                     setattr(alert, field, value)
                 except Exception as e:
-                    logger.warning(f"Error setting field {field}: {e}")
+                    logger.warning(f"⚠️  Error setting field {field}: {e}")
         
         # Update JSM fields if we have a match
         if jsm_data:
             self._update_jsm_fields(alert, jsm_data, match_info)
+            logger.debug(f"🔗 Updated JSM data for alert {alert.alert_id}")
         else:
-            # Clear JSM fields if no match found
+            # Clear JSM fields if no match found (or update them if previously matched)
+            if alert.jsm_alert_id:
+                logger.debug(f"🔄 Clearing JSM match for alert {alert.alert_id}")
             alert.jsm_alert_id = None
             alert.jsm_status = None
             alert.match_type = 'none'
             alert.match_confidence = 0
-        
-        logger.debug(f"Updated alert {alert.alert_id}")
     
-    def _create_new_alert(self, db: Session, grafana_data: Dict, jsm_data: Optional[Dict], match_info: Dict):
+    def _create_new_alert(self, db: Session, grafana_data: Dict, jsm_data: Optional[Dict], match_info: Dict) -> Optional[Alert]:
         """Create new alert in database"""
         try:
             # Create base alert from Grafana data
-            new_alert = Alert(**grafana_data, grafana_status="active")
+            new_alert = Alert(
+                **grafana_data,
+                grafana_status="active",
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
             
             # Add JSM fields if we have a match
             if jsm_data:
                 self._update_jsm_fields(new_alert, jsm_data, match_info)
+                logger.debug(f"🔗 Created new alert with JSM match: {new_alert.alert_id}")
             else:
                 new_alert.match_type = 'none'
                 new_alert.match_confidence = 0
+                logger.debug(f"➕ Created new alert without JSM match: {new_alert.alert_id}")
             
             db.add(new_alert)
             db.flush()  # Get the ID
             
-            logger.info(f"Created new alert {new_alert.alert_id} with JSM match: {bool(jsm_data)}")
+            return new_alert
             
         except Exception as e:
-            logger.error(f"Error creating new alert: {e}")
+            logger.error(f"❌ Error creating new alert: {e}")
+            return None
     
     def _update_jsm_fields(self, alert: Alert, jsm_data: Dict, match_info: Dict):
         """Update alert with JSM data"""
-        jsm_status_info = self.jsm_service.get_alert_status_info(jsm_data)
-        
-        alert.jsm_alert_id = jsm_status_info['id']
-        alert.jsm_tiny_id = jsm_status_info['tiny_id']
-        alert.jsm_status = jsm_status_info['status']
-        alert.jsm_acknowledged = jsm_status_info['acknowledged']
-        alert.jsm_owner = jsm_status_info['owner']
-        alert.jsm_priority = jsm_status_info['priority']
-        alert.jsm_alias = jsm_status_info['alias']
-        alert.jsm_integration_name = jsm_status_info['integration_name']
-        alert.jsm_source = jsm_status_info['source']
-        alert.jsm_count = jsm_status_info['count']
-        alert.jsm_tags = jsm_status_info['tags']
-        alert.match_type = match_info['match_type']
-        alert.match_confidence = match_info['match_confidence']
-        
-        # Parse JSM timestamps
         try:
-            if jsm_status_info['created_at']:
-                alert.jsm_created_at = datetime.fromisoformat(
-                    jsm_status_info['created_at'].replace('Z', '+00:00')
-                )
-            if jsm_status_info['updated_at']:
-                alert.jsm_updated_at = datetime.fromisoformat(
-                    jsm_status_info['updated_at'].replace('Z', '+00:00')
-                )
-            if jsm_status_info['last_occurred_at']:
-                alert.jsm_last_occurred_at = datetime.fromisoformat(
-                    jsm_status_info['last_occurred_at'].replace('Z', '+00:00')
-                )
+            jsm_status_info = self.jsm_service.get_alert_status_info(jsm_data)
+            
+            alert.jsm_alert_id = jsm_status_info['id']
+            alert.jsm_tiny_id = jsm_status_info['tiny_id']
+            alert.jsm_status = jsm_status_info['status']
+            alert.jsm_acknowledged = jsm_status_info['acknowledged']
+            alert.jsm_owner = jsm_status_info['owner']
+            alert.jsm_priority = jsm_status_info['priority']
+            alert.jsm_alias = jsm_status_info['alias']
+            alert.jsm_integration_name = jsm_status_info['integration_name']
+            alert.jsm_source = jsm_status_info['source']
+            alert.jsm_count = jsm_status_info['count']
+            alert.jsm_tags = jsm_status_info['tags']
+            alert.match_type = match_info['match_type']
+            alert.match_confidence = match_info['match_confidence']
+            
+            # Parse JSM timestamps
+            try:
+                if jsm_status_info['created_at']:
+                    alert.jsm_created_at = datetime.fromisoformat(
+                        jsm_status_info['created_at'].replace('Z', '+00:00')
+                    )
+                if jsm_status_info['updated_at']:
+                    alert.jsm_updated_at = datetime.fromisoformat(
+                        jsm_status_info['updated_at'].replace('Z', '+00:00')
+                    )
+                if jsm_status_info['last_occurred_at']:
+                    alert.jsm_last_occurred_at = datetime.fromisoformat(
+                        jsm_status_info['last_occurred_at'].replace('Z', '+00:00')
+                    )
+            except Exception as e:
+                logger.warning(f"⚠️  Error parsing JSM timestamps: {e}")
+            
+            # Update legacy fields for backwards compatibility
+            alert.jira_status = self._map_jsm_to_jira_status(jsm_status_info['status'])
+            alert.jira_assignee = jsm_status_info['owner']
+            
+            # Set acknowledgment if JSM shows it's acknowledged
+            if jsm_status_info['acknowledged'] and not alert.acknowledged_by:
+                alert.acknowledged_by = jsm_status_info['owner'] or "JSM User"
+                alert.acknowledged_at = alert.jsm_updated_at or datetime.utcnow()
+                
         except Exception as e:
-            logger.warning(f"Error parsing JSM timestamps: {e}")
-        
-        # Update legacy fields for backwards compatibility
-        alert.jira_status = self._map_jsm_to_jira_status(jsm_status_info['status'])
-        alert.jira_assignee = jsm_status_info['owner']
-        
-        # Set acknowledgment if JSM shows it's acknowledged
-        if jsm_status_info['acknowledged'] and not alert.acknowledged_by:
-            alert.acknowledged_by = jsm_status_info['owner'] or "JSM User"
-            alert.acknowledged_at = alert.jsm_updated_at or datetime.utcnow()
+            logger.error(f"❌ Error updating JSM fields: {e}")
     
     def _map_jsm_to_jira_status(self, jsm_status: str) -> str:
         """Map JSM status to legacy Jira status for backwards compatibility"""
@@ -222,31 +251,34 @@ class AlertService:
                 Alert.grafana_status == "active"
             ).all()
             
-            logger.info(f"Found {len(resolved_alerts)} alerts to mark as resolved")
-            
-            for alert in resolved_alerts:
-                alert.grafana_status = "resolved"
+            if resolved_alerts:
+                logger.info(f"🔄 Found {len(resolved_alerts)} alerts to mark as resolved")
                 
-                # If it has a JSM alert and it's not already closed, try to close it
-                if alert.jsm_alert_id and alert.jsm_status != 'closed':
-                    try:
-                        success = await self.jsm_service.close_jsm_alert(
-                            alert.jsm_alert_id, 
-                            "Alert resolved in Grafana",
-                            "Alert Manager"
-                        )
-                        if success:
-                            alert.jsm_status = 'closed'
-                            if not alert.resolved_by:
-                                alert.resolved_by = "Auto-resolved (Grafana)"
-                                alert.resolved_at = datetime.utcnow()
-                    except Exception as e:
-                        logger.error(f"Error closing JSM alert {alert.jsm_alert_id}: {e}")
-                
-                logger.debug(f"Marked alert {alert.alert_id} as resolved")
+                for alert in resolved_alerts:
+                    alert.grafana_status = "resolved"
+                    
+                    # If it has a JSM alert and auto-close is enabled, try to close it
+                    if (alert.jsm_alert_id and alert.jsm_status != 'closed' and 
+                        settings.ENABLE_AUTO_CLOSE):
+                        try:
+                            success = await self.jsm_service.close_jsm_alert(
+                                alert.jsm_alert_id, 
+                                "Alert resolved in Grafana",
+                                "Alert Manager Auto-Resolve"
+                            )
+                            if success:
+                                alert.jsm_status = 'closed'
+                                if not alert.resolved_by:
+                                    alert.resolved_by = "Auto-resolved (Grafana)"
+                                    alert.resolved_at = datetime.utcnow()
+                                logger.debug(f"🔒 Auto-closed JSM alert {alert.jsm_alert_id}")
+                        except Exception as e:
+                            logger.error(f"❌ Error closing JSM alert {alert.jsm_alert_id}: {e}")
+                    
+                    logger.debug(f"✅ Marked alert {alert.alert_id} as resolved")
                 
         except Exception as e:
-            logger.error(f"Error marking resolved alerts: {e}")
+            logger.error(f"❌ Error marking resolved alerts: {e}")
     
     async def _update_orphaned_jsm_alerts(self, db: Session, jsm_alerts: List[Dict]):
         """Update alerts that have JSM IDs but may have status changes"""
@@ -258,15 +290,23 @@ class AlertService:
                 Alert.jsm_alert_id.isnot(None)
             ).all()
             
+            updated_count = 0
             for alert in alerts_with_jsm:
                 if alert.jsm_alert_id in jsm_alerts_by_id:
                     jsm_data = jsm_alerts_by_id[alert.jsm_alert_id]
-                    match_info = {'match_type': alert.match_type, 'match_confidence': alert.match_confidence}
+                    match_info = {
+                        'match_type': alert.match_type or 'existing', 
+                        'match_confidence': alert.match_confidence or 100
+                    }
                     self._update_jsm_fields(alert, jsm_data, match_info)
-                    logger.debug(f"Updated JSM status for alert {alert.alert_id}")
+                    updated_count += 1
+                    logger.debug(f"🔄 Updated JSM status for alert {alert.alert_id}")
+            
+            if updated_count > 0:
+                logger.info(f"🔄 Updated {updated_count} existing JSM-linked alerts")
                     
         except Exception as e:
-            logger.error(f"Error updating orphaned JSM alerts: {e}")
+            logger.error(f"❌ Error updating orphaned JSM alerts: {e}")
     
     def get_alerts(self, db: Session, skip: int = 0, limit: int = 100) -> List[Alert]:
         """Get paginated alerts from database"""
@@ -280,38 +320,42 @@ class AlertService:
         """Acknowledge alerts in JSM and update DB"""
         try:
             alerts = db.query(Alert).filter(Alert.id.in_(alert_ids)).all()
+            success_count = 0
             
             for alert in alerts:
                 try:
-                    success = False
+                    jsm_success = False
                     
                     # Try to acknowledge in JSM if we have JSM alert ID
                     if alert.jsm_alert_id:
-                        success = await self.jsm_service.acknowledge_jsm_alert(
+                        jsm_success = await self.jsm_service.acknowledge_jsm_alert(
                             alert.jsm_alert_id, note, acknowledged_by
                         )
-                        if success:
+                        if jsm_success:
                             alert.jsm_status = "acked"
                             alert.jsm_acknowledged = True
-                            logger.info(f"Acknowledged JSM alert {alert.jsm_alert_id}")
+                            logger.info(f"✅ Acknowledged JSM alert {alert.jsm_alert_id}")
                     
                     # Update local acknowledgment tracking regardless
                     alert.acknowledged_by = acknowledged_by
                     alert.acknowledged_at = datetime.utcnow()
                     alert.jira_status = "acknowledged"  # Legacy compatibility
                     
+                    success_count += 1
+                    
                     if not alert.jsm_alert_id:
-                        logger.warning(f"Alert {alert.id} has no JSM alert ID - only updated locally")
+                        logger.warning(f"⚠️  Alert {alert.id} has no JSM alert ID - only updated locally")
                         
                 except Exception as e:
-                    logger.error(f"Error acknowledging alert {alert.id}: {e}")
+                    logger.error(f"❌ Error acknowledging alert {alert.id}: {e}")
                     continue
             
             db.commit()
-            return True
+            logger.info(f"✅ Successfully acknowledged {success_count}/{len(alerts)} alerts")
+            return success_count > 0
             
         except Exception as e:
-            logger.error(f"Error acknowledging alerts: {e}")
+            logger.error(f"❌ Error acknowledging alerts: {e}")
             db.rollback()
             return False
     
@@ -319,21 +363,22 @@ class AlertService:
         """Manually resolve alerts in JSM and update DB"""
         try:
             alerts = db.query(Alert).filter(Alert.id.in_(alert_ids)).all()
+            success_count = 0
             
             for alert in alerts:
                 try:
-                    success = False
+                    jsm_success = False
                     
                     # Try to close in JSM if we have JSM alert ID
                     if alert.jsm_alert_id:
-                        success = await self.jsm_service.close_jsm_alert(
+                        jsm_success = await self.jsm_service.close_jsm_alert(
                             alert.jsm_alert_id, 
                             note or "Manually resolved via Alert Manager",
                             resolved_by
                         )
-                        if success:
+                        if jsm_success:
                             alert.jsm_status = "closed"
-                            logger.info(f"Closed JSM alert {alert.jsm_alert_id}")
+                            logger.info(f"✅ Closed JSM alert {alert.jsm_alert_id}")
                     
                     # Update local resolution tracking
                     alert.grafana_status = "resolved"
@@ -341,18 +386,21 @@ class AlertService:
                     alert.resolved_at = datetime.utcnow()
                     alert.jira_status = "resolved"  # Legacy compatibility
                     
+                    success_count += 1
+                    
                     if not alert.jsm_alert_id:
-                        logger.warning(f"Alert {alert.id} has no JSM alert ID - only updated locally")
+                        logger.warning(f"⚠️  Alert {alert.id} has no JSM alert ID - only updated locally")
                         
                 except Exception as e:
-                    logger.error(f"Error resolving alert {alert.id}: {e}")
+                    logger.error(f"❌ Error resolving alert {alert.id}: {e}")
                     continue
             
             db.commit()
-            return True
+            logger.info(f"✅ Successfully resolved {success_count}/{len(alerts)} alerts")
+            return success_count > 0
             
         except Exception as e:
-            logger.error(f"Error resolving alerts: {e}")
+            logger.error(f"❌ Error resolving alerts: {e}")
             db.rollback()
             return False
     
@@ -391,14 +439,15 @@ class AlertService:
         
         # Count by match type
         match_types = {}
-        match_results = db.query(Alert.match_type, Alert).filter(Alert.match_type.isnot(None)).all()
-        for match_type, _ in match_results:
+        match_results = db.query(Alert.match_type).filter(Alert.match_type.isnot(None)).all()
+        for (match_type,) in match_results:
             match_types[match_type] = match_types.get(match_type, 0) + 1
         
         return {
             'total_alerts': total_alerts,
             'matched_alerts': matched_alerts,
             'unmatched_alerts': unmatched_alerts,
+            'match_rate_percentage': round((matched_alerts / total_alerts * 100) if total_alerts > 0 else 0, 1),
             'jsm_status_counts': {
                 'open': jsm_open,
                 'acked': jsm_acked,
