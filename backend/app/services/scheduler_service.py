@@ -14,7 +14,6 @@ class SchedulerService:
         self.scheduler = BackgroundScheduler()
         self.alert_service = AlertService()
         self.scheduler.start()
-        # Don't load jobs immediately - wait for tables to be created
         self._jobs_loaded = False
         logger.info("📅 Scheduler service initialized (jobs will be loaded later)")
     
@@ -37,7 +36,7 @@ class SchedulerService:
             logger.info(f"✅ Loaded {len(configs)} cron jobs into scheduler")
         except ProgrammingError as e:
             logger.warning(f"⚠️  Tables not ready yet: {e}")
-            raise  # Re-raise so caller knows it failed
+            raise
         except Exception as e:
             logger.error(f"❌ Error loading jobs: {e}")
             raise
@@ -62,9 +61,9 @@ class SchedulerService:
         """Job function to sync alerts"""
         db = SessionLocal()
         try:
-            logger.info("🔄 Running scheduled alert sync...")
+            logger.info("🔄 Running scheduled JSM alert sync...")
             await self.alert_service.sync_alerts(db)
-            logger.info("✅ Scheduled alert sync completed")
+            logger.info("✅ Scheduled JSM alert sync completed")
         except Exception as e:
             logger.error(f"❌ Error in scheduled alert sync: {e}")
         finally:

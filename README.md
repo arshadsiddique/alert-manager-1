@@ -1,133 +1,156 @@
-# Devo Alert Manager
+# Grafana-JSM Alert Manager v2.0
 
-A full-stack application that automatically syncs alerts from Grafana to Jira Service Management, enabling seamless incident management workflow.
+A comprehensive alert management system that automatically syncs alerts from Grafana to Jira Service Management (JSM) using the latest JSM API endpoints.
 
-## 🚀 Features
+## 🚀 Key Features
 
-- **Real-time Alert Sync**: Automatically syncs active alerts from Grafana to Jira Service Management
-- **Jira Integration**: Creates incidents, acknowledges, and resolves issues in Jira
-- **Alert Management**: View, acknowledge, and resolve alerts through a modern web interface
-- **Configurable Sync**: Customizable cron jobs for alert synchronization
-- **Status Tracking**: Track alert status across both Grafana and Jira
-- **Direct Links**: Quick access to Grafana dashboards and Jira issues
+- **JSM API Integration**: Uses the current JSM API endpoints (not deprecated Opsgenie)
+- **Intelligent Alert Matching**: Multiple matching strategies (alias, tags, content, time-proximity)
+- **Real-time Sync**: Configurable cron jobs for automatic synchronization
+- **Web Dashboard**: Modern React interface with Ant Design components
+- **Bulk Operations**: Acknowledge or resolve multiple alerts simultaneously
+- **Production Filtering**: Automatically filters out non-production alerts
 
 ## 🏗️ Architecture
 
-- **Backend**: FastAPI (Python) with SQLAlchemy ORM
-- **Frontend**: React with Ant Design components
-- **Database**: PostgreSQL
-- **Scheduler**: APScheduler for periodic alert sync
-- **Containerization**: Docker & Docker Compose
+### Backend
+- **FastAPI** with SQLAlchemy ORM
+- **PostgreSQL** database
+- **APScheduler** for cron jobs
+- **JSM API v1** integration with proper authentication
+
+### Frontend
+- **React 18** with hooks
+- **Ant Design** component library
+- **Axios** for API communication
+- **Moment.js** for date handling
+
+### Database Schema
+- Comprehensive alert model with JSM fields
+- Alert matching metadata (confidence scores, match types)
+- Legacy Jira compatibility fields
+- Optimized indexes for performance
 
 ## 📋 Prerequisites
 
 - Docker and Docker Compose
 - Grafana instance with API access
 - Jira Service Management with API access
-- Valid API tokens for both services
+- JSM Cloud ID (auto-retrieved from tenant info)
 
-## 🔧 Setup
+## 🔧 Quick Setup
 
-### 1. Clone the Repository
+### 1. Clone and Configure
 
 ```bash
 git clone <repository-url>
-cd grafana-jira-alert-manager
-```
+cd grafana-jsm-alert-manager
 
-### 2. Configure Environment Variables
-
-Copy the example environment file and update with your credentials:
-
-```bash
+# Copy environment configuration
 cp .env.example .env
 ```
+
+### 2. Update Environment Variables
 
 Edit `.env` with your actual values:
 
 ```bash
-# Database Configuration
-DATABASE_URL="postgresql://user:password@postgres:5432/alertdb"
-
 # Grafana Configuration
-GRAFANA_API_URL="https://grafana.example.com"
+GRAFANA_API_URL="https://grafana.observability.devo.com"
 GRAFANA_API_KEY="your_actual_grafana_api_key"
 
-# Jira Service Management Configuration
-JIRA_URL="https://yourcompany.atlassian.net"
-JIRA_USER_EMAIL="your-email@domain.com"
+# JSM Configuration (NEW FORMAT)
+JIRA_URL="https://devoinc.atlassian.net"
+JIRA_USER_EMAIL="your-email@devo.com"
 JIRA_API_TOKEN="your_actual_jira_api_token"
-JIRA_PROJECT_KEY="OP"
-JIRA_INCIDENT_ISSUE_TYPE="Incident"
-JIRA_ACKNOWLEDGE_TRANSITION_NAME="To Do"
-JIRA_RESOLVE_TRANSITION_NAME="Completed"
-
-# Sync Configuration
-GRAFANA_SYNC_INTERVAL_SECONDS=600
-
-# Frontend Configuration
-REACT_APP_API_BASE_URL="http://localhost:8000"
-REACT_APP_JIRA_URL="https://yourcompany.atlassian.net"
+JSM_CLOUD_ID="cfe6e1fe-26bb-4354-9cf1-fffaf23319db"  # Your actual cloud ID
 ```
 
-### 3. Obtain API Credentials
-
-#### Grafana API Key
-1. Go to your Grafana instance
-2. Navigate to Configuration → API Keys
-3. Create a new API key with Admin permissions
-4. Copy the key to `GRAFANA_API_KEY`
-
-#### Jira API Token
-1. Go to https://id.atlassian.com/manage-profile/security/api-tokens
-2. Create a new API token
-3. Copy the token to `JIRA_API_TOKEN`
-4. Set your Jira email in `JIRA_USER_EMAIL`
-
-### 4. Configure Jira Workflow
-
-Ensure your Jira project has the correct workflow transitions:
-- Update `JIRA_ACKNOWLEDGE_TRANSITION_NAME` with the exact name of your acknowledge transition
-- Update `JIRA_RESOLVE_TRANSITION_NAME` with the exact name of your resolve transition
-
-### 5. Start the Application
+### 3. Start the Application
 
 ```bash
 docker-compose up -d
 ```
 
-This will start:
+This starts:
 - PostgreSQL database (port 5432)
 - Backend API (port 8000)
 - Frontend web app (port 3000)
 
-### 6. Access the Application
+### 4. Access the Application
 
 - **Web Interface**: http://localhost:3000
 - **API Documentation**: http://localhost:8000/docs
 - **Health Check**: http://localhost:8000/health
 
-## 📱 Usage
-
-### Alert Management
-1. **View Alerts**: The main dashboard shows all alerts with their status
-2. **Acknowledge Alerts**: Select alerts and click "Acknowledge in Jira" to transition them
-3. **Resolve Alerts**: Select alerts and click "Resolve in Jira" to close them
-4. **Sync Alerts**: Click "Sync Alerts" to manually trigger synchronization
-5. **View in Jira**: Click on Jira issue links to open issues directly
-
-### Configuration
-1. Navigate to the Configuration tab
-2. View and modify cron job schedules
-3. Enable/disable automatic synchronization
-
 ## 🔄 How It Works
 
-1. **Alert Detection**: The system periodically queries Grafana for active alerts
-2. **Issue Creation**: New alerts automatically create incidents in Jira with proper labels and priority
-3. **Status Sync**: Alert statuses are synchronized between Grafana and Jira
-4. **Auto-Resolution**: When alerts are resolved in Grafana, corresponding Jira issues are automatically resolved
-5. **Manual Management**: Users can acknowledge and resolve alerts through the web interface
+### Alert Matching Process
+
+1. **Fetch from Sources**: Gets active alerts from Grafana and JSM
+2. **Multi-Strategy Matching**:
+   - **Alias Matching** (95% confidence): SHA256 hash of alert characteristics
+   - **Tag Matching** (70-90% confidence): alertname, instance, cluster correlation
+   - **Content Similarity** (70-85% confidence): Summary/description word matching
+   - **Time Proximity** (50-70% confidence): Alerts created within time window
+
+3. **Database Storage**: Stores matched alerts with confidence scores
+4. **Status Sync**: Bidirectional status updates between systems
+
+### JSM API Integration
+
+- **Authentication**: Basic Auth with email:API_token
+- **Rate Limiting**: Built-in rate limiting (100 requests/minute)
+- **Async Operations**: Proper handling of JSM's async operation model
+- **Error Handling**: Exponential backoff retry logic
+
+## 📊 UI Features
+
+### Alert Dashboard
+- Real-time alert display with auto-refresh
+- Advanced filtering (severity, status, match type, cluster)
+- Bulk operations (acknowledge/resolve multiple alerts)
+- JSM integration status indicators
+
+### Alert Details
+- Complete alert information from both Grafana and JSM
+- Match confidence and type display
+- Direct links to Grafana dashboards and JSM alerts
+- Action history tracking
+
+### Configuration Panel
+- Cron job management for sync schedules
+- Real-time job status monitoring
+- Easy schedule modifications
+
+## 🔧 Configuration
+
+### Alert Matching Settings
+
+```bash
+# Confidence threshold for auto-matching
+ALERT_MATCH_CONFIDENCE_THRESHOLD=50.0
+
+# Time window for proximity matching
+ALERT_MATCH_TIME_WINDOW_MINUTES=15
+
+# Alert filtering
+FILTER_NON_PROD_ALERTS=true
+EXCLUDED_CLUSTERS=["stage", "dev", "test"]
+EXCLUDED_ENVIRONMENTS=["devo-stage-eu"]
+```
+
+### Sync Configuration
+
+```bash
+# Sync intervals (seconds)
+GRAFANA_SYNC_INTERVAL_SECONDS=300
+JSM_SYNC_INTERVAL_SECONDS=300
+
+# Feature flags
+USE_JSM_MODE=true
+ENABLE_AUTO_CLOSE=true
+```
 
 ## 🐳 Docker Commands
 
@@ -136,7 +159,8 @@ This will start:
 docker-compose up -d
 
 # View logs
-docker-compose logs -f
+docker-compose logs -f backend
+docker-compose logs -f frontend
 
 # Stop all services
 docker-compose down
@@ -148,19 +172,18 @@ docker-compose down && docker-compose up -d --build
 docker-compose down -v && docker-compose up -d
 ```
 
-## 🔧 API Endpoints
+## 🔍 Monitoring
 
-### Alerts
-- `GET /api/alerts` - List all alerts
-- `GET /api/alerts/{id}` - Get specific alert
-- `POST /api/alerts/acknowledge` - Acknowledge alerts
-- `POST /api/alerts/resolve` - Resolve alerts
-- `POST /api/alerts/sync` - Trigger sync
+### Health Endpoints
+- `/health` - Overall system health
+- `/api/info` - API capabilities and statistics
+- `/api/alerts/sync/summary` - Sync statistics
 
-### Configuration
-- `GET /api/config/cron` - List cron configurations
-- `POST /api/config/cron` - Create cron job
-- `PUT /api/config/cron/{id}` - Update cron job
+### Logging
+- Structured logging with correlation IDs
+- JSM API request/response logging
+- Alert matching decision logging
+- Performance metrics
 
 ## 🛠️ Development
 
@@ -185,52 +208,52 @@ alembic revision --autogenerate -m "Description"
 alembic upgrade head
 ```
 
-## 🔍 Troubleshooting
+## 🔧 Troubleshooting
 
 ### Common Issues
 
-1. **Jira Authentication Errors**
+1. **JSM Authentication Errors**
    - Verify API token and email are correct
-   - Ensure the user has permissions to create issues in the project
+   - Check Cloud ID is properly set
+   - Ensure user has JSM permissions
 
-2. **Grafana Connection Issues**
-   - Check API key permissions
-   - Verify Grafana URL is accessible
+2. **Alert Matching Issues**
+   - Check match confidence thresholds
+   - Review excluded environments/clusters
+   - Verify Grafana alert format
 
-3. **Workflow Transition Errors**
-   - Verify transition names exactly match your Jira workflow
-   - Check that transitions are available for the current issue status
-
-4. **Database Connection Issues**
+3. **Database Connection Issues**
    - Ensure PostgreSQL container is running
    - Check database credentials in environment variables
 
-### Logs
-```bash
-# Backend logs
-docker-compose logs backend
+### Debug Mode
+Set `DEBUG=true` in environment variables for detailed logging.
 
-# Frontend logs
-docker-compose logs frontend
+## 📈 Performance
 
-# Database logs
-docker-compose logs postgres
-```
+### Optimizations
+- Database indexes on frequently queried fields
+- Connection pooling for API requests
+- Efficient alert matching algorithms
+- Frontend virtualization for large datasets
 
-## 📊 Monitoring
+### Scaling Considerations
+- Horizontal scaling with multiple backend instances
+- Database partitioning for large alert volumes
+- Redis caching for frequent lookups
+- Load balancing for high availability
 
-The application provides several monitoring endpoints:
-- Health check: `/health`
-- Metrics: Built-in logging for sync operations
-- Status tracking: Real-time alert status in the web interface
+## 🔒 Security
 
-## 🚨 Security Considerations
+- Environment variable configuration for sensitive data
+- API rate limiting
+- Input validation and sanitization
+- CORS configuration
+- Database connection encryption
 
-- Store API tokens securely using environment variables
-- Use HTTPS in production
-- Regularly rotate API tokens
-- Implement proper access controls for the web interface
-- Consider using secrets management for sensitive data
+## 📄 License
+
+This project is licensed under the MIT License.
 
 ## 🤝 Contributing
 
@@ -240,13 +263,15 @@ The application provides several monitoring endpoints:
 4. Add tests if applicable
 5. Submit a pull request
 
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
 ## 📞 Support
 
 For issues and questions:
 1. Check the troubleshooting section
 2. Review application logs
 3. Create an issue in the repository
+
+---
+
+**Migration Status**: ✅ Successfully migrated from deprecated Opsgenie API to JSM API v1
+**Version**: 2.0.0
+**Last Updated**: June 2025

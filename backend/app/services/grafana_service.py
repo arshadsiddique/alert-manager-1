@@ -19,7 +19,7 @@ class GrafanaService:
         """Fetch all active alerts from Grafana"""
         try:
             url = f"{self.base_url}/api/alertmanager/grafana/api/v2/alerts"
-            response = requests.get(url, headers=self.headers)
+            response = requests.get(url, headers=self.headers, timeout=30)
             response.raise_for_status()
             
             alerts = response.json()

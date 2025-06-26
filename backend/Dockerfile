@@ -17,14 +17,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY startup.sh .
 RUN chmod +x startup.sh
 
-# Copy alembic configuration (alembic.ini should be in backend root)
+# Copy alembic configuration
 COPY alembic.ini .
 COPY alembic/ ./alembic/
 
 # Copy application code
 COPY app/ ./app/
 
-# Create empty __init__.py files if they don't exist
+# Create empty __init__.py files
 RUN touch app/__init__.py \
     && touch app/models/__init__.py \
     && touch app/schemas/__init__.py \

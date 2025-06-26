@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { Layout, Menu, Typography, Space } from 'antd';
+import { Layout, Menu, Typography, Space, Badge } from 'antd';
 import { 
   AlertOutlined, 
   SettingOutlined, 
-  DashboardOutlined 
+  DashboardOutlined,
+  ThunderboltOutlined
 } from '@ant-design/icons';
 
 const { Header, Sider, Content } = Layout;
@@ -16,7 +17,7 @@ const AppLayout = ({ children, currentPage, onPageChange }) => {
     {
       key: 'alerts',
       icon: <AlertOutlined />,
-      label: 'Alerts',
+      label: 'JSM Alerts',
     },
     {
       key: 'config',
@@ -34,10 +35,11 @@ const AppLayout = ({ children, currentPage, onPageChange }) => {
         theme="dark"
       >
         <div style={{ padding: '16px', textAlign: 'center' }}>
-          <DashboardOutlined style={{ fontSize: '24px', color: 'white' }} />
+          <ThunderboltOutlined style={{ fontSize: '24px', color: '#1890ff' }} />
           {!collapsed && (
             <div style={{ color: 'white', marginTop: '8px', fontSize: '12px' }}>
-              Devo Alert Manager
+              JSM Alert Manager
+              <Badge count="v2.0" style={{ backgroundColor: '#52c41a', marginLeft: 8 }} />
             </div>
           )}
         </div>
@@ -54,8 +56,9 @@ const AppLayout = ({ children, currentPage, onPageChange }) => {
         <Header style={{ background: 'white', padding: '0 24px' }}>
           <Space>
             <Title level={3} style={{ margin: 0 }}>
-              Devo Alert Manager
+              Grafana-JSM Alert Manager
             </Title>
+            <Badge count="JSM" style={{ backgroundColor: '#1890ff' }} />
             <span style={{ color: '#666', fontSize: '14px' }}>
               Sync alerts from Grafana to Jira Service Management
             </span>

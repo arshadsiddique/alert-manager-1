@@ -52,7 +52,7 @@ class AlertService:
             
             # Fetch alerts from both systems
             grafana_alerts = await self.grafana_service.get_active_alerts()
-            jsm_alerts = await self.jsm_service.get_jsm_alerts(limit=500)  # Get more JSM alerts
+            jsm_alerts = await self.jsm_service.get_jsm_alerts(limit=500)
             
             logger.info(f"Retrieved {len(grafana_alerts)} Grafana alerts and {len(jsm_alerts)} JSM alerts")
             

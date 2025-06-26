@@ -9,9 +9,10 @@ import {
   Modal, 
   message,
   Space,
-  Alert
+  Alert,
+  Tag
 } from 'antd';
-import { PlusOutlined, EditOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { configApi } from '../services/api';
 
 const ConfigPanel = () => {
@@ -66,18 +67,32 @@ const ConfigPanel = () => {
       title: 'Job Name',
       dataIndex: 'job_name',
       key: 'job_name',
+      render: (text) => (
+        <Space>
+          <ThunderboltOutlined style={{ color: '#1890ff' }} />
+          {text}
+        </Space>
+      ),
     },
     {
       title: 'Cron Expression',
       dataIndex: 'cron_expression',
       key: 'cron_expression',
-      render: (text) => <code>{text}</code>,
+      render: (text) => (
+        <Tag color="blue">
+          <code>{text}</code>
+        </Tag>
+      ),
     },
     {
-      title: 'Enabled',
+      title: 'Status',
       dataIndex: 'is_enabled',
       key: 'is_enabled',
-      render: (enabled) => <Switch checked={enabled} disabled />,
+      render: (enabled) => (
+        <Tag color={enabled ? 'green' : 'red'}>
+          {enabled ? 'Enabled' : 'Disabled'}
+        </Tag>
+      ),
     },
     {
       title: 'Created At',
@@ -103,8 +118,8 @@ const ConfigPanel = () => {
   return (
     <div>
       <Alert
-        message="Sync Configuration"
-        description="Configure when alerts are synchronized between Grafana and Jira Service Management. The default job runs every 5 minutes."
+        message="JSM Sync Configuration"
+        description="Configure when alerts are synchronized between Grafana and Jira Service Management. The system will automatically match alerts using alias, tags, and content similarity."
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
@@ -155,7 +170,7 @@ const ConfigPanel = () => {
               label="Job Name"
               rules={[{ required: true, message: 'Please input job name!' }]}
             >
-              <Input placeholder="e.g., alert-sync" disabled={editingConfig} />
+              <Input placeholder="e.g., grafana-jsm-sync" disabled={editingConfig} />
             </Form.Item>
 
             <Form.Item

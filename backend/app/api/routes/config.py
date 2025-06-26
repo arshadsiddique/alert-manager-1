@@ -12,7 +12,6 @@ def get_scheduler_service():
     from ...main import get_global_scheduler
     scheduler = get_global_scheduler()
     if scheduler is None:
-        # Fallback: create a new instance if global one isn't ready
         from ...services.scheduler_service import SchedulerService
         return SchedulerService()
     return scheduler
@@ -23,10 +22,9 @@ async def get_cron_configs(db: Session = Depends(get_db)):
     try:
         scheduler_service = get_scheduler_service()
         if scheduler_service:
-            scheduler_service.ensure_jobs_loaded()  # Ensure jobs are loaded
+            scheduler_service.ensure_jobs_loaded()
         return db.query(CronConfig).all()
     except Exception as e:
-        # Return empty list if tables don't exist yet
         return []
 
 @router.post("/cron", response_model=CronConfigResponse)
@@ -45,7 +43,6 @@ async def create_cron_config(
         if scheduler_service and db_config.is_enabled:
             scheduler_service._add_job(db_config)
     except Exception as e:
-        # Log the error but don't fail the request
         print(f"Warning: Could not add job to scheduler: {e}")
     
     return db_config
@@ -71,13 +68,11 @@ async def update_cron_config(
     try:
         scheduler_service = get_scheduler_service()
         if scheduler_service:
-            # Update scheduler
             if db_config.is_enabled:
                 scheduler_service.update_job(db_config.job_name, db_config.cron_expression)
             else:
                 scheduler_service.remove_job(db_config.job_name)
     except Exception as e:
-        # Log the error but don't fail the request
         print(f"Warning: Could not update job in scheduler: {e}")
     
     return db_config

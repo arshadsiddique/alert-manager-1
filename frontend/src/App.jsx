@@ -8,7 +8,7 @@ import './App.css';
 
 function App() {
   const [currentPage, setCurrentPage] = useState('alerts');
-  const { alerts, loading, acknowledgeAlerts, resolveAlerts, syncAlerts } = useAlerts();
+  const { alerts, loading, error, acknowledgeAlerts, resolveAlerts, syncAlerts } = useAlerts();
 
   const renderContent = () => {
     switch (currentPage) {
@@ -17,6 +17,7 @@ function App() {
           <AlertTable
             alerts={alerts}
             loading={loading}
+            error={error}
             onAcknowledge={acknowledgeAlerts}
             onResolve={resolveAlerts}
             onSync={syncAlerts}

@@ -11,9 +11,10 @@ export const useAlerts = () => {
     setError(null);
     try {
       const response = await alertsApi.getAlerts();
-      setAlerts(response.data);
+      setAlerts(response.data || []);
     } catch (err) {
       setError(err.message);
+      console.error('Error fetching alerts:', err);
     } finally {
       setLoading(false);
     }
@@ -21,44 +22,48 @@ export const useAlerts = () => {
 
   const acknowledgeAlerts = async (alertIds, note, acknowledgedBy) => {
     try {
-      // Save username to localStorage for next time
       if (acknowledgedBy) {
         localStorage.setItem('alertManager_username', acknowledgedBy);
       }
       
       await alertsApi.acknowledgeAlerts(alertIds, note, acknowledgedBy);
-      await fetchAlerts(); // Refresh alerts
+      await fetchAlerts();
       return true;
     } catch (err) {
       setError(err.message);
+      console.error('Error acknowledging alerts:', err);
       return false;
     }
   };
 
   const resolveAlerts = async (alertIds, note, resolvedBy) => {
     try {
-      // Save username to localStorage for next time
       if (resolvedBy) {
         localStorage.setItem('alertManager_username', resolvedBy);
       }
       
       await alertsApi.resolveAlerts(alertIds, note, resolvedBy);
-      await fetchAlerts(); // Refresh alerts
+      await fetchAlerts();
       return true;
     } catch (err) {
       setError(err.message);
+      console.error('Error resolving alerts:', err);
       return false;
     }
   };
 
   const syncAlerts = async () => {
     try {
+      setLoading(true);
       await alertsApi.syncAlerts();
-      await fetchAlerts(); // Refresh alerts
+      await fetchAlerts();
       return true;
     } catch (err) {
       setError(err.message);
+      console.error('Error syncing alerts:', err);
       return false;
+    } finally {
+      setLoading(false);
     }
   };
 
