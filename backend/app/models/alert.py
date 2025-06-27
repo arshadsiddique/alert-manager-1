@@ -40,6 +40,10 @@ class Alert(Base):
     # Matching Information
     match_type = Column(String, nullable=True, index=True)
     match_confidence = Column(Float, nullable=True)
+    match_score = Column(Float, nullable=True, index=True)
+    match_details = Column(JSON, nullable=True)
+    manual_review_required = Column(Boolean, default=False, index=True)
+    matching_timestamp = Column(DateTime, nullable=True)
     
     # Manual Actions (for tracking manual interventions)
     acknowledged_by = Column(String, nullable=True)
@@ -87,3 +91,17 @@ class Alert(Base):
             self.grafana_status == 'resolved' or
             self.effective_status in ['closed', 'resolved']
         )
+
+    @property
+    def match_quality(self):
+        """Get match quality category"""
+        if not self.match_confidence:
+            return 'no_match'
+        elif self.match_confidence >= 85:
+            return 'high_confidence'
+        elif self.match_confidence >= 70:
+            return 'good_match'
+        elif self.match_confidence >= 60:
+            return 'manual_review'
+        else:
+            return 'low_confidence'

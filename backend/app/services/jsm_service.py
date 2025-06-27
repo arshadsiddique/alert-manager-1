@@ -3,6 +3,7 @@ import logging
 import base64
 import hashlib
 import re
+import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from ..core.config import settings
@@ -15,7 +16,7 @@ class JSMService:
         self.tenant_url = settings.JIRA_URL  # e.g., https://devoinc.atlassian.net
         self.user_email = settings.JIRA_USER_EMAIL
         self.api_token = settings.JIRA_API_TOKEN
-        self.cloud_id = None
+        self.cloud_id = settings.JSM_CLOUD_ID
         
         # Create basic auth header
         auth_string = f"{self.user_email}:{self.api_token}"
@@ -27,6 +28,34 @@ class JSMService:
             "Accept": "application/json",
             "Content-Type": "application/json"
         }
+        
+        # Rate limiting
+        self.last_request_time = 0
+        self.min_request_interval = 60 / getattr(settings, 'JSM_RATE_LIMIT_PER_MINUTE', 100)
+    
+    def _rate_limit(self):
+        """Implement rate limiting for JSM API calls"""
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+        
+        if time_since_last < self.min_request_interval:
+            sleep_time = self.min_request_interval - time_since_last
+            logger.debug(f"Rate limiting: sleeping for {sleep_time:.2f} seconds")
+            time.sleep(sleep_time)
+        
+        self.last_request_time = time.time()
+    
+    def _safe_str(self, value: Any) -> str:
+        """Safely convert any value to string, handling None values"""
+        if value is None:
+            return ""
+        return str(value)
+    
+    def _safe_lower(self, value: Any) -> str:
+        """Safely convert any value to lowercase string, handling None values"""
+        if value is None:
+            return ""
+        return str(value).lower()
     
     async def get_cloud_id(self) -> Optional[str]:
         """Retrieve Atlassian Cloud ID from tenant info"""
@@ -34,8 +63,9 @@ class JSMService:
             return self.cloud_id
             
         try:
+            self._rate_limit()
             url = f"{self.tenant_url}/_edge/tenant_info"
-            response = requests.get(url, headers=self.headers)
+            response = requests.get(url, headers=self.headers, timeout=30)
             response.raise_for_status()
             
             data = response.json()
@@ -53,31 +83,37 @@ class JSMService:
             return None
     
     async def get_jsm_alerts(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
-        """Fetch alerts from JSM"""
+        """Fetch alerts from JSM with enhanced error handling"""
         try:
             cloud_id = await self.get_cloud_id()
             if not cloud_id:
                 logger.error("Cannot fetch JSM alerts without Cloud ID")
                 return []
             
+            self._rate_limit()
             url = f"{self.base_url}/{cloud_id}/v1/alerts"
             params = {
-                "limit": limit,
+                "limit": min(limit, 100),  # JSM API limit
                 "offset": offset,
                 "sort": "createdAt",
                 "order": "desc"
             }
             
-            response = requests.get(url, headers=self.headers, params=params)
+            response = requests.get(
+                url, 
+                headers=self.headers, 
+                params=params,
+                timeout=getattr(settings, 'JSM_API_TIMEOUT', 30)
+            )
             response.raise_for_status()
             
             data = response.json()
             alerts = data.get('values', [])
             
-            logger.info(f"Retrieved {len(alerts)} JSM alerts")
+            logger.info(f"Retrieved {len(alerts)} JSM alerts from API")
             
-            # Log sample JSM alert for debugging
-            if alerts and settings.ENABLE_MATCH_LOGGING:
+            # Log sample alert for debugging if enabled
+            if alerts and getattr(settings, 'DEBUG_MATCHING_ENABLED', False):
                 sample_alert = alerts[0]
                 logger.debug(f"Sample JSM alert: {sample_alert}")
             
@@ -86,25 +122,283 @@ class JSMService:
         except requests.RequestException as e:
             logger.error(f"Error fetching JSM alerts: {e}")
             if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Response status: {e.response.status_code}")
                 logger.error(f"Response content: {e.response.text}")
             return []
     
-    async def get_jsm_alert_by_id(self, alert_id: str) -> Optional[Dict[str, Any]]:
-        """Get specific JSM alert by ID"""
+    def extract_alert_name_from_jsm(self, jsm_alert: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract alert name from JSM alert with multiple fallback strategies.
+        
+        Priority order:
+        1. Tags with 'alertname:' prefix
+        2. Parse from message field 
+        3. Use alias field
+        4. Extract from description using patterns
+        """
         try:
-            cloud_id = await self.get_cloud_id()
-            if not cloud_id:
-                return None
+            # Handle nested data structure if present
+            alert_data = jsm_alert.get('data', jsm_alert)
             
-            url = f"{self.base_url}/{cloud_id}/v1/alerts/{alert_id}"
-            response = requests.get(url, headers=self.headers)
-            response.raise_for_status()
+            # Strategy 1: Check tags for alertname prefix
+            tags = alert_data.get('tags', [])
+            for tag in tags:
+                if isinstance(tag, str) and tag.startswith('alertname:'):
+                    alert_name = tag.split(':', 1)[1].strip()
+                    if alert_name and self._is_valid_alert_name(alert_name):
+                        logger.debug(f"Extracted alert name from tag: {alert_name}")
+                        return alert_name
             
-            return response.json()
+            # Strategy 2: Parse from message field
+            message = self._safe_str(alert_data.get('message', '')).strip()
+            if message:
+                # Look for Grafana-style message format
+                # Pattern: [Grafana]: *Summary*: AlertName
+                grafana_patterns = [
+                    r'\[Grafana\]:\s*\*[^*]+\*:\s*([^\s\n]+)',
+                    r'\*Summary\*:\s*([^\s\n*]+)',
+                    r'Alert:\s*([A-Za-z0-9\-_]+)',
+                    r'^([A-Za-z0-9\-_]{3,})',  # Start of message if it looks like alert name
+                ]
+                
+                for pattern in grafana_patterns:
+                    match = re.search(pattern, message)
+                    if match:
+                        candidate = match.group(1).strip()
+                        if self._is_valid_alert_name(candidate):
+                            logger.debug(f"Extracted alert name from message pattern: {candidate}")
+                            return candidate
+                
+                # Fallback: Look for kubernetes/prometheus patterns
+                k8s_patterns = [
+                    r'(pod-[a-z0-9\-]+)',
+                    r'(container-[a-z0-9\-]+)',
+                    r'([a-z0-9\-]+prometheus[a-z0-9\-]*)',
+                    r'([a-z0-9\-]+metrics[a-z0-9\-]*)',
+                ]
+                
+                for pattern in k8s_patterns:
+                    match = re.search(pattern, message, re.IGNORECASE)
+                    if match:
+                        candidate = match.group(1)
+                        if self._is_valid_alert_name(candidate):
+                            logger.debug(f"Extracted alert name from k8s pattern: {candidate}")
+                            return candidate
             
-        except requests.RequestException as e:
-            logger.error(f"Error fetching JSM alert {alert_id}: {e}")
+            # Strategy 3: Check alias field
+            alias = self._safe_str(alert_data.get('alias', '')).strip()
+            if alias and self._is_valid_alert_name(alias):
+                logger.debug(f"Extracted alert name from alias: {alias}")
+                return alias
+            
+            # Strategy 4: Extract from description
+            description = self._safe_str(alert_data.get('description', '')).strip()
+            if description:
+                desc_patterns = [
+                    r'Alert:\s*([A-Za-z0-9\-_]+)',
+                    r'AlertName:\s*([A-Za-z0-9\-_]+)',
+                    r'Rule:\s*([A-Za-z0-9\-_]+)',
+                ]
+                for pattern in desc_patterns:
+                    match = re.search(pattern, description, re.IGNORECASE)
+                    if match:
+                        candidate = match.group(1).strip()
+                        if self._is_valid_alert_name(candidate):
+                            logger.debug(f"Extracted alert name from description: {candidate}")
+                            return candidate
+            
+            # If all else fails, generate a name from available data
+            tiny_id = self._safe_str(alert_data.get('tinyId', ''))
+            if tiny_id:
+                fallback_name = f"jsm-alert-{tiny_id}"
+                logger.debug(f"Using fallback alert name: {fallback_name}")
+                return fallback_name
+            
+            logger.warning(f"Could not extract alert name from JSM alert: {alert_data.get('id', 'unknown')}")
             return None
+            
+        except Exception as e:
+            logger.error(f"Error extracting alert name from JSM alert: {e}")
+            return None
+    
+    def extract_cluster_from_jsm(self, jsm_alert: Dict[str, Any]) -> Optional[str]:
+        """Extract cluster information from JSM alert with comprehensive fallback."""
+        try:
+            alert_data = jsm_alert.get('data', jsm_alert)
+            
+            # Strategy 1: Check tags for cluster information
+            tags = alert_data.get('tags', [])
+            for tag in tags:
+                if isinstance(tag, str):
+                    # Direct cluster tag
+                    if tag.startswith('cluster:'):
+                        cluster = tag.split(':', 1)[1].strip()
+                        if cluster and self._looks_like_cluster_name(cluster):
+                            logger.debug(f"Extracted cluster from tag: {cluster}")
+                            return cluster
+                    
+                    # Instance tag that may contain cluster info
+                    if tag.startswith('instance:'):
+                        instance = tag.split(':', 1)[1].strip()
+                        cluster = self._extract_cluster_from_instance(instance)
+                        if cluster:
+                            logger.debug(f"Extracted cluster from instance tag: {cluster}")
+                            return cluster
+                    
+                    # Look for cluster patterns in other tags
+                    cluster_match = re.search(r'([a-zA-Z0-9\-_]*(?:prod|staging|dev|test)[a-zA-Z0-9\-_]*)', tag, re.IGNORECASE)
+                    if cluster_match:
+                        cluster = cluster_match.group(1)
+                        if self._looks_like_cluster_name(cluster):
+                            logger.debug(f"Extracted cluster from tag pattern: {cluster}")
+                            return cluster
+            
+            # Strategy 2: Extract from message
+            message = self._safe_str(alert_data.get('message', ''))
+            cluster_patterns = [
+                r'cluster[:\s]+([a-zA-Z0-9\-_]+)',
+                r'datanode-\d+-([a-zA-Z0-9\-_]+)',
+                r'([a-zA-Z0-9\-_]+)-cloud-',
+                r'in\s+([a-zA-Z0-9\-_]+)\s+cluster',
+            ]
+            for pattern in cluster_patterns:
+                match = re.search(pattern, message, re.IGNORECASE)
+                if match:
+                    cluster = match.group(1)
+                    if self._looks_like_cluster_name(cluster):
+                        logger.debug(f"Extracted cluster from message: {cluster}")
+                        return cluster
+            
+            # Strategy 3: Check entity field
+            entity = self._safe_str(alert_data.get('entity', '')).strip()
+            if entity and self._looks_like_cluster_name(entity):
+                logger.debug(f"Using entity as cluster: {entity}")
+                return entity
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error extracting cluster from JSM alert: {e}")
+            return None
+    
+    def extract_severity_from_jsm(self, jsm_alert: Dict[str, Any]) -> Optional[str]:
+        """Extract severity from JSM alert with proper priority mapping."""
+        try:
+            alert_data = jsm_alert.get('data', jsm_alert)
+            
+            # Strategy 1: Check priority field and map to severity
+            priority = self._safe_str(alert_data.get('priority', '')).upper()
+            priority_mapping = {
+                'P1': 'critical',
+                'P2': 'warning',
+                'P3': 'info',
+                'P4': 'low',
+                'P5': 'info'
+            }
+            
+            if priority in priority_mapping:
+                severity = priority_mapping[priority]
+                logger.debug(f"Mapped priority {priority} to severity: {severity}")
+                return severity
+            
+            # Strategy 2: Check tags for severity keywords
+            tags = alert_data.get('tags', [])
+            severity_keywords = {
+                'critical': ['critical', 'crit', 'p1', 'severity:critical'],
+                'warning': ['warning', 'warn', 'p2', 'severity:warning'],
+                'info': ['info', 'information', 'p3', 'p5', 'severity:info'],
+                'low': ['low', 'minor', 'p4', 'severity:low']
+            }
+            
+            for tag in tags:
+                if isinstance(tag, str):
+                    tag_lower = tag.lower()
+                    for severity, keywords in severity_keywords.items():
+                        if any(keyword in tag_lower for keyword in keywords):
+                            logger.debug(f"Extracted severity from tag: {severity}")
+                            return severity
+            
+            # Strategy 3: Check message/description for severity indicators  
+            text_content = f"{alert_data.get('message', '')} {alert_data.get('description', '')}"
+            text_lower = text_content.lower()
+            
+            for severity, keywords in severity_keywords.items():
+                if any(keyword in text_lower for keyword in keywords):
+                    logger.debug(f"Extracted severity from text content: {severity}")
+                    return severity
+            
+            # Default to 'info' if no severity found
+            logger.debug("No severity found, defaulting to 'info'")
+            return 'info'
+            
+        except Exception as e:
+            logger.error(f"Error extracting severity from JSM alert: {e}")
+            return 'info'
+    
+    def _extract_cluster_from_instance(self, instance: str) -> Optional[str]:
+        """Extract cluster name from instance string."""
+        if not instance:
+            return None
+        
+        # Pattern: datanode-21-pro-cloud-shared-aws-us-east-1
+        patterns = [
+            r'^([a-zA-Z0-9\-_]+)-cloud-',  # Extract before '-cloud-'
+            r'^([a-zA-Z0-9\-_]+)-\d+-',    # Extract before number
+            r'^([a-zA-Z]+)',               # Just the first word
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, instance)
+            if match:
+                cluster = match.group(1)
+                if self._looks_like_cluster_name(cluster):
+                    return cluster
+        
+        return None
+    
+    def _is_valid_alert_name(self, name: str) -> bool:
+        """Validate if extracted text looks like a valid alert name."""
+        if not name or len(name) < 3:
+            return False
+        
+        # Check if it's not just generic text
+        generic_patterns = [
+            r'^(alert|error|warning|info|debug|message|notification)$',
+            r'^\d+$',  # Just numbers
+            r'^[^a-zA-Z]*$',  # No letters
+            r'^(the|and|or|but|in|on|at|to|for|of|with|by)$',  # Common words
+        ]
+        
+        for pattern in generic_patterns:
+            if re.match(pattern, name, re.IGNORECASE):
+                return False
+        
+        # Must contain at least some alphanumeric characters
+        if not re.search(r'[a-zA-Z0-9]', name):
+            return False
+        
+        return True
+    
+    def _looks_like_cluster_name(self, name: str) -> bool:
+        """Check if a string looks like a cluster name."""
+        if not name or len(name) < 2:
+            return False
+        
+        # Common cluster name patterns
+        cluster_indicators = [
+            r'(prod|production|staging|stage|dev|development|test|testing)',
+            r'(cluster|k8s|kubernetes)',
+            r'(east|west|north|south|us|eu|asia)',
+            r'(aws|azure|gcp|cloud)',
+        ]
+        
+        # Must be alphanumeric with common separators
+        if not re.match(r'^[a-zA-Z0-9\-_]+$', name):
+            return False
+        
+        # Should contain cluster-related terms
+        name_lower = name.lower()
+        return any(re.search(pattern, name_lower) for pattern in cluster_indicators)
     
     async def acknowledge_jsm_alert(self, alert_id: str, note: str = None, user: str = None) -> bool:
         """Acknowledge a JSM alert"""
@@ -113,6 +407,7 @@ class JSMService:
             if not cloud_id:
                 return False
             
+            self._rate_limit()
             url = f"{self.base_url}/{cloud_id}/v1/alerts/{alert_id}/acknowledge"
             
             payload = {}
@@ -121,7 +416,12 @@ class JSMService:
             if user:
                 payload["user"] = user
             
-            response = requests.post(url, headers=self.headers, json=payload)
+            response = requests.post(
+                url, 
+                headers=self.headers, 
+                json=payload,
+                timeout=getattr(settings, 'JSM_API_TIMEOUT', 30)
+            )
             response.raise_for_status()
             
             logger.info(f"Successfully acknowledged JSM alert {alert_id}")
@@ -138,6 +438,7 @@ class JSMService:
             if not cloud_id:
                 return False
             
+            self._rate_limit()
             url = f"{self.base_url}/{cloud_id}/v1/alerts/{alert_id}/close"
             
             payload = {}
@@ -146,7 +447,12 @@ class JSMService:
             if user:
                 payload["user"] = user
             
-            response = requests.post(url, headers=self.headers, json=payload)
+            response = requests.post(
+                url, 
+                headers=self.headers, 
+                json=payload,
+                timeout=getattr(settings, 'JSM_API_TIMEOUT', 30)
+            )
             response.raise_for_status()
             
             logger.info(f"Successfully closed JSM alert {alert_id}")
@@ -156,294 +462,24 @@ class JSMService:
             logger.error(f"Error closing JSM alert {alert_id}: {e}")
             return False
     
-    def extract_alert_name_from_jsm(self, jsm_alert: Dict[str, Any]) -> str:
-        """Extract alert name from JSM alert using multiple strategies"""
-        tags = jsm_alert.get('tags', [])
-        
-        # Strategy 1: Look for alertname in tags
-        for tag in tags:
-            if tag.startswith('alertname:'):
-                return tag.split(':', 1)[1].strip()
-        
-        # Strategy 2: Extract from message
-        message = jsm_alert.get('message', '')
-        if message:
-            # Look for patterns like "Alert: alertname" or similar
-            patterns = [
-                r'Alert:\s*([^\s\n]+)',
-                r'alertname[:\s=]+([^\s\n,]+)',
-                r'\*([^*]+)\*',  # Bold text in markdown
-            ]
-            
-            for pattern in patterns:
-                match = re.search(pattern, message, re.IGNORECASE)
-                if match:
-                    return match.group(1).strip()
-        
-        # Strategy 3: Use alias if available
-        alias = jsm_alert.get('alias', '')
-        if alias:
-            return f"jsm-{alias[:20]}"
-        
-        # Fallback: use JSM alert ID
-        return f"jsm-alert-{jsm_alert.get('tinyId', jsm_alert.get('id', 'unknown'))}"
-    
-    def extract_cluster_from_jsm(self, jsm_alert: Dict[str, Any]) -> Optional[str]:
-        """Extract cluster information from JSM alert"""
-        tags = jsm_alert.get('tags', [])
-        
-        # Look for cluster information in tags
-        for tag in tags:
-            if 'cluster' in tag.lower():
-                if ':' in tag:
-                    return tag.split(':', 1)[1].strip()
-            if 'instance:' in tag:
-                # Extract cluster from instance name
-                instance = tag.split(':', 1)[1]
-                # Common patterns: datanode-21-pro-cloud-shared-aws-us-east-1
-                if '-cloud-' in instance:
-                    parts = instance.split('-')
-                    for i, part in enumerate(parts):
-                        if part == 'cloud' and i > 0:
-                            return '-'.join(parts[:i])
-        
-        # Look in message
-        message = jsm_alert.get('message', '')
-        cluster_patterns = [
-            r'cluster[:\s=]+([^\s\n,]+)',
-            r'datanode-\d+-([^-\s]+)',
-            r'([^-\s]+)-cloud-',
-        ]
-        
-        for pattern in cluster_patterns:
-            match = re.search(pattern, message, re.IGNORECASE)
-            if match:
-                return match.group(1).strip()
-        
-        return None
-    
-    def extract_severity_from_jsm(self, jsm_alert: Dict[str, Any]) -> Optional[str]:
-        """Extract severity from JSM alert"""
-        tags = jsm_alert.get('tags', [])
-        
-        # Look for severity in tags
-        for tag in tags:
-            if tag.startswith('severity:'):
-                return tag.split(':', 1)[1].strip()
-            if tag.startswith('og_priority:'):
-                priority = tag.split(':', 1)[1].strip()
-                # Map JSM priority to severity
-                priority_map = {
-                    'P1': 'critical',
-                    'P2': 'warning', 
-                    'P3': 'info',
-                    'P4': 'info',
-                    'P5': 'info'
-                }
-                return priority_map.get(priority, 'unknown')
-        
-        # Check JSM priority field
-        priority = jsm_alert.get('priority', '')
-        if priority:
-            priority_map = {
-                'P1': 'critical',
-                'P2': 'warning',
-                'P3': 'info',
-                'P4': 'info', 
-                'P5': 'info'
-            }
-            return priority_map.get(priority, 'unknown')
-        
-        return 'unknown'
-    
-    def create_alert_fingerprint(self, grafana_alert: Dict[str, Any]) -> str:
-        """Create a consistent fingerprint for Grafana alerts"""
-        # Use multiple fields to create a unique fingerprint
-        alert_name = grafana_alert.get('alert_name', '')
-        cluster = grafana_alert.get('cluster', '')
-        severity = grafana_alert.get('severity', '')
-        summary = grafana_alert.get('summary', '')
-        
-        # Create a normalized string
-        fingerprint_data = f"{alert_name}|{cluster}|{severity}|{summary[:50]}"
-        
-        # Create hash
-        return hashlib.sha256(fingerprint_data.encode()).hexdigest()[:16]
-    
-    def calculate_content_similarity_score(self, grafana_alert: Dict, jsm_alert: Dict) -> int:
-        """Calculate similarity score between Grafana and JSM alerts"""
-        score = 0
-        
-        # Extract JSM alert details
-        jsm_alert_name = self.extract_alert_name_from_jsm(jsm_alert)
-        jsm_cluster = self.extract_cluster_from_jsm(jsm_alert)
-        jsm_severity = self.extract_severity_from_jsm(jsm_alert)
-        jsm_message = jsm_alert.get('message', '').lower()
-        
-        # Grafana alert details
-        grafana_alert_name = grafana_alert.get('alert_name', '').lower()
-        grafana_cluster = grafana_alert.get('cluster', '').lower()
-        grafana_severity = grafana_alert.get('severity', '').lower()
-        grafana_summary = grafana_alert.get('summary', '').lower()
-        
-        # Alert name matching (highest weight)
-        if grafana_alert_name and jsm_alert_name:
-            if grafana_alert_name in jsm_alert_name.lower() or jsm_alert_name.lower() in grafana_alert_name:
-                score += 40
-            elif self._fuzzy_match(grafana_alert_name, jsm_alert_name.lower()):
-                score += 30
-        
-        # Cluster matching
-        if grafana_cluster and jsm_cluster:
-            if grafana_cluster in jsm_cluster.lower() or jsm_cluster.lower() in grafana_cluster:
-                score += 25
-        
-        # Severity matching
-        if grafana_severity and jsm_severity:
-            if grafana_severity == jsm_severity.lower():
-                score += 15
-        
-        # Content similarity
-        if grafana_summary and jsm_message:
-            common_words = self._get_common_words(grafana_summary, jsm_message)
-            if len(common_words) > 2:
-                score += min(20, len(common_words) * 3)
-        
-        # Time proximity (alerts created within reasonable time)
-        grafana_time = grafana_alert.get('started_at')
-        jsm_time = jsm_alert.get('createdAt')
-        
-        if grafana_time and jsm_time:
-            try:
-                if isinstance(grafana_time, str):
-                    grafana_dt = datetime.fromisoformat(grafana_time.replace('Z', '+00:00'))
-                else:
-                    grafana_dt = grafana_time
-                    
-                jsm_dt = datetime.fromisoformat(jsm_time.replace('Z', '+00:00'))
-                
-                time_diff = abs((grafana_dt - jsm_dt).total_seconds())
-                
-                # Bonus for alerts created close in time
-                if time_diff < 300:  # 5 minutes
-                    score += 10
-                elif time_diff < 900:  # 15 minutes
-                    score += 5
-                elif time_diff < 3600:  # 1 hour
-                    score += 2
-            except Exception as e:
-                logger.debug(f"Error parsing timestamps for matching: {e}")
-        
-        # Source bonus (if JSM alert is from Grafana)
-        if jsm_alert.get('source') == 'Grafana' or jsm_alert.get('integrationName') == 'Grafana':
-            score += 15
-        
-        return min(score, 100)  # Cap at 100
-    
-    def _fuzzy_match(self, str1: str, str2: str) -> bool:
-        """Simple fuzzy matching for alert names"""
-        # Remove common prefixes/suffixes and special characters
-        clean1 = re.sub(r'[_-]', ' ', str1).strip()
-        clean2 = re.sub(r'[_-]', ' ', str2).strip()
-        
-        words1 = set(clean1.split())
-        words2 = set(clean2.split())
-        
-        if not words1 or not words2:
-            return False
-        
-        # Check if significant portion of words match
-        common = words1.intersection(words2)
-        similarity = len(common) / max(len(words1), len(words2))
-        
-        return similarity > 0.6
-    
-    def _get_common_words(self, text1: str, text2: str) -> set:
-        """Get common meaningful words between two texts"""
-        # Skip common words
-        skip_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did'}
-        
-        words1 = set(re.findall(r'\b\w+\b', text1.lower()))
-        words2 = set(re.findall(r'\b\w+\b', text2.lower()))
-        
-        # Remove skip words and short words
-        words1 = {w for w in words1 if len(w) > 2 and w not in skip_words}
-        words2 = {w for w in words2 if len(w) > 2 and w not in skip_words}
-        
-        return words1.intersection(words2)
-    
-    def match_grafana_with_jsm(self, grafana_alerts: List[Dict], jsm_alerts: List[Dict]) -> List[Dict]:
-        """Match Grafana alerts with JSM alerts using improved algorithm"""
-        matched_alerts = []
-        used_jsm_alerts = set()
-        
-        logger.info(f"Starting alert matching: {len(grafana_alerts)} Grafana alerts, {len(jsm_alerts)} JSM alerts")
-        
-        for grafana_alert in grafana_alerts:
-            match_info = {
-                'grafana_alert': grafana_alert,
-                'jsm_alert': None,
-                'match_type': 'none',
-                'match_confidence': 0
-            }
-            
-            best_match = None
-            best_score = settings.ALERT_MATCH_CONFIDENCE_THRESHOLD
-            best_match_type = 'none'
-            
-            # Try to match with each JSM alert
-            for jsm_alert in jsm_alerts:
-                if jsm_alert['id'] in used_jsm_alerts:
-                    continue
-                
-                # Calculate similarity score
-                score = self.calculate_content_similarity_score(grafana_alert, jsm_alert)
-                
-                if score > best_score:
-                    best_score = score
-                    best_match = jsm_alert
-                    
-                    # Determine match type based on score
-                    if score >= 90:
-                        best_match_type = 'high_confidence'
-                    elif score >= 70:
-                        best_match_type = 'content_similarity'
-                    else:
-                        best_match_type = 'low_confidence'
-            
-            # If we found a good match, use it
-            if best_match:
-                match_info['jsm_alert'] = best_match
-                match_info['match_type'] = best_match_type
-                match_info['match_confidence'] = best_score
-                used_jsm_alerts.add(best_match['id'])
-                
-                if settings.ENABLE_MATCH_LOGGING:
-                    logger.info(f"Matched alert '{grafana_alert.get('alert_name')}' with JSM alert {best_match.get('tinyId')} (score: {best_score})")
-            
-            matched_alerts.append(match_info)
-        
-        matches_found = len([m for m in matched_alerts if m['jsm_alert'] is not None])
-        logger.info(f"Alert matching completed: {matches_found}/{len(matched_alerts)} alerts matched")
-        
-        return matched_alerts
-    
     def get_alert_status_info(self, jsm_alert: Dict) -> Dict[str, Any]:
         """Extract status information from JSM alert"""
+        alert_data = jsm_alert.get('data', jsm_alert)
+        
         return {
-            'id': jsm_alert.get('id'),
-            'tiny_id': jsm_alert.get('tinyId'),
-            'status': jsm_alert.get('status'),  # open, acked, closed
-            'acknowledged': jsm_alert.get('acknowledged', False),
-            'owner': jsm_alert.get('owner'),
-            'priority': jsm_alert.get('priority'),
-            'created_at': jsm_alert.get('createdAt'),
-            'updated_at': jsm_alert.get('updatedAt'),
-            'last_occurred_at': jsm_alert.get('lastOccuredAt'),
-            'count': jsm_alert.get('count', 1),
-            'tags': jsm_alert.get('tags', []),
-            'alias': jsm_alert.get('alias'),
-            'integration_name': jsm_alert.get('integrationName'),
-            'source': jsm_alert.get('source'),
-            'message': jsm_alert.get('message', '')
+            'id': self._safe_str(alert_data.get('id')),
+            'tiny_id': self._safe_str(alert_data.get('tinyId')),
+            'status': self._safe_str(alert_data.get('status')),  # open, acked, closed
+            'acknowledged': bool(alert_data.get('acknowledged', False)),
+            'owner': self._safe_str(alert_data.get('owner')) or None,
+            'priority': self._safe_str(alert_data.get('priority')) or None,
+            'created_at': self._safe_str(alert_data.get('createdAt')) or None,
+            'updated_at': self._safe_str(alert_data.get('updatedAt')) or None,
+            'last_occurred_at': self._safe_str(alert_data.get('lastOccuredAt')) or None,
+            'count': alert_data.get('count', 1),
+            'tags': alert_data.get('tags', []),
+            'alias': self._safe_str(alert_data.get('alias')) or None,
+            'integration_name': self._safe_str(alert_data.get('integrationName')) or None,
+            'source': self._safe_str(alert_data.get('source')) or None,
+            'message': self._safe_str(alert_data.get('message', ''))
         }
