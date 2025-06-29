@@ -347,45 +347,43 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       ),
     },
     {
-      title: 'JSM Alert',
-      key: 'jsm_alert',
-      sorter: (a, b) => (a.jsm_tiny_id || '').localeCompare(b.jsm_tiny_id || ''),
-      render: (_, record) => {
-        if (record.jsm_alert_id) {
-          const jsmUrl = getJSMUrl(record);
-          return (
-            <div>
-              <Button
-                type="link"
-                size="small"
-                icon={<ThunderboltOutlined />}
-                onClick={() => jsmUrl && window.open(jsmUrl, '_blank')}
-                disabled={!jsmUrl}
-              >
-                {record.jsm_tiny_id || record.jsm_alert_id?.substring(0, 8)}
-              </Button>
-              {record.jsm_priority && (
-                <div style={{ fontSize: '10px', color: '#999' }}>
-                  Priority: {record.jsm_priority}
-                </div>
-              )}
-              {record.jsm_count > 1 && (
-                <div style={{ fontSize: '10px', color: '#1890ff' }}>
-                  Count: {record.jsm_count}
-                </div>
-              )}
-            </div>
-          );
-        } else {
-          return (
-            <Tooltip title="No matching JSM alert found">
-              <span style={{ color: '#ccc', fontSize: '12px' }}>
-                No JSM Alert
-              </span>
-            </Tooltip>
-          );
-        }
-      },
+        title: 'Links & Actions',
+        key: 'links_actions',
+        render: (_, record) => {
+            const jsmUrl = getJSMUrl(record);
+            return (
+                <Space direction="vertical" size="small">
+                    {record.generator_url && (
+                        <Button
+                            type="link"
+                            size="small"
+                            icon={<LinkOutlined />}
+                            onClick={() => window.open(record.generator_url, '_blank')}
+                        >
+                            Grafana
+                        </Button>
+                    )}
+                    {jsmUrl && (
+                        <Button
+                            type="link"
+                            size="small"
+                            icon={<ThunderboltOutlined />}
+                            onClick={() => window.open(jsmUrl, '_blank')}
+                        >
+                            JSM Alert
+                        </Button>
+                    )}
+                    <Button
+                        type="link"
+                        size="small"
+                        icon={<EyeOutlined />}
+                        onClick={() => showAlertDetails(record)}
+                    >
+                        Details
+                    </Button>
+                </Space>
+            );
+        },
     },
     {
       title: 'Created / Updated',
@@ -412,31 +410,6 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
             </div>
           )}
         </div>
-      ),
-    },
-    {
-      title: 'Actions',
-      key: 'actions',
-      render: (_, record) => (
-        <Space direction="vertical" size="small">
-          {record.generator_url && (
-            <Button
-              type="link"
-              size="small"
-              onClick={() => window.open(record.generator_url, '_blank')}
-            >
-              View in Grafana
-            </Button>
-          )}
-          <Button
-            type="link"
-            size="small"
-            icon={<EyeOutlined />}
-            onClick={() => showAlertDetails(record)}
-          >
-            Details
-          </Button>
-        </Space>
       ),
     },
   ];
@@ -754,7 +727,7 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
         title={
           <Space>
             <InfoCircleOutlined />
-            Alert Details
+            {'Alert Details  '}
             {selectedAlert?.jsm_alert_id && (
               <Tag color="blue">JSM Alert</Tag>
             )}
@@ -951,7 +924,7 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
         okButtonProps={{ danger: true }}
       >
         <p>Are you sure you want to close {selectedRowKeys.length} alert(s) in JSM?</p>
-        <p>This will close the JSM alerts and mark them as resolved in the system.</p>
+        <p>This will close the JSM alerts and mark them as resolved in the system.</p>.
         <Form form={resolveForm} layout="vertical">
           <Form.Item
             name="resolved_by"
