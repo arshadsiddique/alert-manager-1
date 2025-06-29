@@ -351,35 +351,28 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
         key: 'links_actions',
         render: (_, record) => {
             const jsmUrl = getJSMUrl(record);
+            const grafanaUrl = record.generator_url;
+
             return (
-                <Space direction="vertical" size="small">
-                    {record.generator_url && (
-                        <Button
-                            type="link"
-                            size="small"
-                            icon={<LinkOutlined />}
-                            onClick={() => window.open(record.generator_url, '_blank')}
-                        >
-                            Grafana
-                        </Button>
+                <Space direction="vertical" align="start" size={4}>
+                    {grafanaUrl && (
+                        <a href={grafanaUrl} target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center' }}>
+                            <LinkOutlined style={{ marginRight: 5 }} /> View in Grafana
+                        </a>
                     )}
                     {jsmUrl && (
-                        <Button
-                            type="link"
-                            size="small"
-                            icon={<ThunderboltOutlined />}
-                            onClick={() => window.open(jsmUrl, '_blank')}
-                        >
-                            JSM Alert
-                        </Button>
+                        <a href={jsmUrl} target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center' }}>
+                            <ThunderboltOutlined style={{ marginRight: 5 }} /> View in JSM
+                        </a>
                     )}
                     <Button
                         type="link"
                         size="small"
                         icon={<EyeOutlined />}
                         onClick={() => showAlertDetails(record)}
+                        style={{ padding: 0, height: 'auto', display: 'flex', alignItems: 'center' }}
                     >
-                        Details
+                        <EyeOutlined style={{ marginRight: 5 }} /> Show Details
                     </Button>
                 </Space>
             );
@@ -475,15 +468,9 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       {/* JSM Integration Status */}
       {stats.total > 0 && (
         <Alert
-          message={`JSM Integration Status: ${stats.matched}/${stats.total} alerts matched (${stats.matchRate}%)`}
-          description={
-            stats.matchRate < 50 
-              ? "Low match rate detected. Consider checking JSM alert configuration and matching thresholds."
-              : stats.matchRate > 80 
-              ? "Excellent JSM integration! Most alerts are properly matched."
-              : "Good JSM integration. Most alerts are being matched with JSM."
-          }
-          type={stats.matchRate < 50 ? "warning" : stats.matchRate > 80 ? "success" : "info"}
+          message={`Displaying ${stats.total} Matched JSM/Grafana Alerts`}
+          description="Only Grafana alerts that have been successfully matched with a corresponding JSM alert are shown here. The synchronization runs periodically in the background."
+          type="success"
           showIcon
           style={{ marginBottom: 16 }}
         />

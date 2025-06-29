@@ -14,7 +14,10 @@ alert_service = AlertService()
 
 @router.get("/", response_model=List[AlertResponse])
 async def get_alerts(skip: int = 0, limit: int = 1000, db: Session = Depends(get_db)):
-    """Get paginated list of alerts"""
+    """
+    Get paginated list of Grafana alerts that have been successfully matched 
+    with a JSM alert.
+    """
     alerts = alert_service.get_alerts(db, skip=skip, limit=limit)
     return alerts
 

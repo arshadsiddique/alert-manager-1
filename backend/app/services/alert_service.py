@@ -311,8 +311,9 @@ class AlertService:
             logger.error(f"❌ Error updating orphaned JSM alerts: {e}")
     
     def get_alerts(self, db: Session, skip: int = 0, limit: int = 100) -> List[Alert]:
-        """Get paginated alerts from database"""
-        return db.query(Alert).order_by(Alert.created_at.desc()).offset(skip).limit(limit).all()
+        """Get paginated alerts from database, showing only matched alerts by default."""
+        query = db.query(Alert).filter(Alert.jsm_alert_id.isnot(None))
+        return query.order_by(Alert.created_at.desc()).offset(skip).limit(limit).all()
     
     def get_alert(self, db: Session, alert_id: int) -> Optional[Alert]:
         """Get single alert by ID"""
