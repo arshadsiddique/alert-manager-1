@@ -5,6 +5,7 @@ from ..models.alert import Alert
 from ..schemas.alert import AlertCreate, AlertUpdate
 from .grafana_service import GrafanaService
 from .jsm_service import JSMService
+from .matching_service import AlertMatchingService
 from ..core.config import settings
 import logging
 
@@ -14,6 +15,7 @@ class AlertService:
     def __init__(self):
         self.grafana_service = GrafanaService()
         self.jsm_service = JSMService()
+        self.matching_service = AlertMatchingService()
     
     def _sanitize_alert_data(self, alert_data: dict) -> dict:
         """Sanitize alert data to handle None values and prevent errors"""
@@ -69,8 +71,8 @@ class AlertService:
             if len(filtered_grafana_alerts) != len(grafana_alerts):
                 logger.info(f"🔍 After filtering: {len(filtered_grafana_alerts)} production Grafana alerts (filtered out {len(grafana_alerts) - len(filtered_grafana_alerts)})")
             
-            # Match Grafana alerts with JSM alerts
-            matched_alerts = self.jsm_service.match_grafana_with_jsm(
+            # Match Grafana alerts with JSM alerts using the matching service
+            matched_alerts = self.matching_service.match_grafana_with_jsm(
                 filtered_grafana_alerts, jsm_alerts
             )
             
