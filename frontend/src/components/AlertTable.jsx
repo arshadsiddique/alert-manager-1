@@ -206,9 +206,9 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
 
   const getJSMUrl = (alert) => {
     if (alert.jsm_alert_id) {
-      // Construct JSM alert URL
       const baseUrl = process.env.REACT_APP_JIRA_URL || 'https://devoinc.atlassian.net';
-      return `${baseUrl}/plugins/servlet/ac/com.atlassian.jira.plugins.jira-opsgenie-plugin/opsgenie-alert-details?alertId=${alert.jsm_alert_id}`;
+      // Construct the new, simplified JSM alert URL
+      return `${baseUrl}/jira/ops/alerts/${alert.jsm_alert_id}`;
     }
     return null;
   };
@@ -698,6 +698,7 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
         }}
         loading={loading}
         pagination={{
+          position: ['topRight'],
           pageSize: 50,
           showSizeChanger: true,
           pageSizeOptions: ['10', '25', '50', '100', '200'],
