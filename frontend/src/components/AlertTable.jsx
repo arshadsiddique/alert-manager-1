@@ -67,6 +67,7 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
     cluster: '',
     severity: [],
     grafanaStatus: [],
+    jsmPriority: [],
     jsmStatus: [],
     matchType: [],
     owner: '',
@@ -83,6 +84,7 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       severities: [...new Set(alerts.map(alert => alert.severity).filter(Boolean))],
       grafanaStatuses: [...new Set(alerts.map(alert => alert.grafana_status).filter(Boolean))],
       jsmStatuses: [...new Set(alerts.map(alert => alert.jsm_status).filter(Boolean))],
+      jsmPriorities: [...new Set(alerts.map(alert => alert.jsm_priority).filter(Boolean))].sort(),
       matchTypes: [...new Set(alerts.map(alert => alert.match_type).filter(Boolean))],
       owners: [...new Set(alerts.map(alert => alert.jsm_owner).filter(Boolean))],
       acknowledgedBy: [...new Set(alerts.map(alert => alert.acknowledged_by).filter(Boolean))],
@@ -120,6 +122,9 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       if (filters.jsmStatus.length > 0 && !filters.jsmStatus.includes(alert.jsm_status)) {
         return false;
       }
+      if (filters.jsmPriority.length > 0 && !filters.jsmPriority.includes(alert.jsm_priority)) {
+         return false;
+      }
       if (filters.matchType.length > 0 && !filters.matchType.includes(alert.match_type)) {
         return false;
       }
@@ -148,6 +153,7 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       severity: [],
       grafanaStatus: [],
       jsmStatus: [],
+      jsmPriority: [],
       matchType: [],
       owner: '',
       acknowledgedBy: '',
@@ -156,6 +162,19 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
     });
     setSelectedRowKeys([]);
   };
+
+  // Logic to check if any selected alerts can be acknowledged
+  const { eligibleForAck, eligibleForAckCount } = useMemo(() => {
+    if (selectedRowKeys.length === 0) {
+      return { eligibleForAck: false, eligibleForAckCount: 0 };
+    }
+    const eligibleAlerts = selectedRowKeys.filter(key => {
+      const alert = alerts.find(a => a.id === key);
+      // Can be acknowledged if it has a JSM alert and is not already acked or closed
+      return alert && alert.jsm_alert_id && alert.jsm_status !== 'acked' && alert.jsm_status !== 'closed';
+    });
+    return { eligibleForAck: eligibleAlerts.length > 0, eligibleForAckCount: eligibleAlerts.length };
+  }, [selectedRowKeys, alerts]);
 
   const getSeverityColor = (severity) => {
     const colors = {
@@ -465,17 +484,6 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
 
   return (
     <div>
-      {/* JSM Integration Status */}
-      {stats.total > 0 && (
-        <Alert
-          message={`Displaying ${stats.total} Matched JSM/Grafana Alerts`}
-          description="Only Grafana alerts that have been successfully matched with a corresponding JSM alert are shown here. The synchronization runs periodically in the background."
-          type="success"
-          showIcon
-          style={{ marginBottom: 16 }}
-        />
-      )}
-
       {/* Status Summary Card */}
       <Card size="small" style={{ marginBottom: 16 }}>
         <Row gutter={16} align="middle">
@@ -661,9 +669,9 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
             type="primary"
             icon={<CheckOutlined />}
             onClick={() => setAcknowledgeModalVisible(true)}
-            disabled={selectedRowKeys.length === 0}
+            disabled={!eligibleForAck}
           >
-            Acknowledge in JSM ({selectedRowKeys.length})
+            Acknowledge in JSM ({eligibleForAckCount})
           </Button>
           
           <Button

@@ -81,7 +81,8 @@ class AlertService:
             
             # Track active Grafana alert IDs
             active_grafana_alert_ids = set()
-            
+            processed_jsm_ids = set()
+
             # Process matched alerts
             for match_info in matched_alerts:
                 try:
@@ -94,6 +95,9 @@ class AlertService:
                         continue
                     
                     active_grafana_alert_ids.add(alert_id)
+                    if jsm_alert and jsm_alert.get('id'):
+                        processed_jsm_ids.add(jsm_alert['id'])
+
                     
                     # Check if alert exists in DB
                     existing_alert = db.query(Alert).filter(Alert.alert_id == alert_id).first()
@@ -112,6 +116,17 @@ class AlertService:
                 except Exception as e:
                     logger.error(f"❌ Error processing alert: {e}")
                     continue
+
+            # Create records for JSM alerts that were not matched to any Grafana alert
+            for jsm_alert in jsm_alerts:
+                jsm_id = jsm_alert.get('id')
+                if jsm_id and jsm_id not in processed_jsm_ids:
+                    existing_jsm_alert = db.query(Alert).filter(Alert.jsm_alert_id == jsm_id).first()
+                    if not existing_jsm_alert:
+                        self._create_jsm_only_alert(db, jsm_alert)
+                    else:
+                        # If it exists but wasn't matched, it might be an old record. Update it.
+                        self._update_jsm_fields(existing_jsm_alert, jsm_alert, {'match_type': 'jsm_only', 'match_confidence': 0})
             
             # Mark resolved alerts (Grafana alerts no longer active)
             await self._mark_resolved_alerts(db, active_grafana_alert_ids)
@@ -131,6 +146,30 @@ class AlertService:
             logger.error(f"❌ Critical error in sync_alerts: {e}")
             db.rollback()
             raise
+
+    def _create_jsm_only_alert(self, db: Session, jsm_data: Dict[str, Any]):
+        """Create an alert record for a JSM alert that has no Grafana match."""
+        jsm_id = jsm_data.get('id')
+        if not jsm_id:
+            return
+
+        jsm_status_info = self.jsm_service.get_alert_status_info(jsm_data)
+        alert_name = self.jsm_service.extract_alert_name_from_jsm(jsm_data) or jsm_status_info.get('message', 'JSM Alert')
+
+        # Create a unique, deterministic alert_id for JSM-only alerts
+        unique_id = f"jsm-only-{jsm_id}"
+
+        new_alert = Alert(
+            alert_id=unique_id,
+            alert_name=alert_name,
+            summary=jsm_status_info.get('message', ''),
+            grafana_status="N/A",  # No corresponding Grafana alert
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        self._update_jsm_fields(new_alert, jsm_data, {'match_type': 'jsm_only', 'match_confidence': 0})
+        db.add(new_alert)
+        logger.info(f"Created new record for JSM-only alert: {jsm_id}")
     
     def _update_existing_alert(self, alert: Alert, grafana_data: Dict, jsm_data: Optional[Dict], match_info: Dict):
         """Update existing alert with latest data"""
@@ -310,7 +349,7 @@ class AlertService:
         except Exception as e:
             logger.error(f"❌ Error updating orphaned JSM alerts: {e}")
     
-    def get_alerts(self, db: Session, skip: int = 0, limit: int = 100) -> List[Alert]:
+    def get_alerts(self, db: Session, skip: int = 0, limit: int = 5000) -> List[Alert]:
         """Get paginated alerts from database, showing only matched alerts by default."""
         query = db.query(Alert).filter(Alert.jsm_alert_id.isnot(None))
         return query.order_by(Alert.created_at.desc()).offset(skip).limit(limit).all()
