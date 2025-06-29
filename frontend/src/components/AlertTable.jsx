@@ -347,7 +347,7 @@ const AlertTable = ({ alerts, loading, onAcknowledge, onResolve, onSync, error }
       ),
     },
     {
-        title: 'Links & Actions',
+        title: 'Alert Details',
         key: 'links_actions',
         render: (_, record) => {
             const jsmUrl = getJSMUrl(record);
